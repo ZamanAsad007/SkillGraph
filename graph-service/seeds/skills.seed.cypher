@@ -1,0 +1,10 @@
+MERGE (:Skill {name: "HTML", category: "Language", difficulty: 1.0});
+MERGE (:Skill {name: "CSS", category: "Language", difficulty: 1.5});
+MERGE (:Skill {name: "JavaScript", category: "Language", difficulty: 2.0});
+MERGE (:Skill {name: "TypeScript", category: "Language", difficulty: 2.5});
+MERGE (:Skill {name: "React", category: "Framework", difficulty: 3.0});
+MERGE (:Skill {name: "Node.js", category: "Runtime", difficulty: 2.5});
+MERGE (:Skill {name: "Express", category: "Framework", difficulty: 2.8});
+MERGE (:Skill {name: "PostgreSQL", category: "Database", difficulty: 2.5});
+MERGE (:Skill {name: "Docker", category: "DevOps", difficulty: 3.5});
+MERGE (:Skill {name: "Kubernetes", category: "DevOps", difficulty: 6.5});

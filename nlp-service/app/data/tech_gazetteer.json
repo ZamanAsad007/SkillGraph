@@ -1,0 +1,21 @@
+{
+  "skills": [
+    { "name": "HTML", "category": "Language", "aliases": ["html5"] },
+    { "name": "CSS", "category": "Language", "aliases": ["css3"] },
+    { "name": "JavaScript", "category": "Language", "aliases": ["js", "ecmascript"] },
+    { "name": "TypeScript", "category": "Language", "aliases": ["ts"] },
+    { "name": "React", "category": "Framework", "aliases": ["reactjs", "react.js"] },
+    { "name": "Node.js", "category": "Runtime", "aliases": ["node", "nodejs"] },
+    { "name": "Express", "category": "Framework", "aliases": ["express.js", "expressjs"] },
+    { "name": "FastAPI", "category": "Framework", "aliases": ["fast api"] },
+    { "name": "PostgreSQL", "category": "Database", "aliases": ["postgres", "psql"] },
+    { "name": "Neo4j", "category": "Database", "aliases": ["cypher"] },
+    { "name": "Redis", "category": "Cache", "aliases": ["redis streams"] },
+    { "name": "Docker", "category": "DevOps", "aliases": ["dockerfile"] },
+    { "name": "Kubernetes", "category": "DevOps", "aliases": ["k8s"] },
+    { "name": "Python", "category": "Language", "aliases": ["py"] },
+    { "name": "Pandas", "category": "ML Library", "aliases": [] },
+    { "name": "NumPy", "category": "ML Library", "aliases": ["numpy"] },
+    { "name": "scikit-learn", "category": "ML Library", "aliases": ["sklearn"] }
+  ]
+}

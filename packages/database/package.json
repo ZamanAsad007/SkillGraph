@@ -1,0 +1,36 @@
+{
+  "name": "@skillgraph/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/prisma.js",
+  "types": "dist/prisma.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/prisma.d.ts",
+      "default": "./dist/prisma.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prisma:generate": "node scripts/with-root-env.mjs prisma generate --schema prisma/schema.prisma",
+    "prisma:migrate": "node scripts/with-root-env.mjs prisma migrate dev --schema prisma/schema.prisma",
+    "prisma:deploy": "node scripts/with-root-env.mjs prisma migrate deploy --schema prisma/schema.prisma",
+    "prisma:studio": "node scripts/with-root-env.mjs prisma studio --schema prisma/schema.prisma",
+    "db:seed": "node scripts/with-root-env.mjs prisma db seed --schema prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.16.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "prisma": "^5.16.2",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma",
+    "seed": "tsx prisma/seed.ts"
+  }
+}

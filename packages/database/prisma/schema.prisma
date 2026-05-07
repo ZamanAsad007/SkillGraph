@@ -1,0 +1,480 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  student
+  professor
+  admin
+  alumni
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  declined
+}
+
+enum MentorshipStatus {
+  requested
+  active
+  completed
+}
+
+model User {
+  id                 String               @id @default(uuid()) @db.Uuid
+  githubId           String               @unique @map("github_id") @db.VarChar(50)
+  githubHandle       String               @unique @map("github_handle") @db.VarChar(100)
+  email              String?              @unique @db.VarChar(255)
+  fullName           String               @map("full_name") @db.VarChar(200)
+  avatarUrl          String?              @map("avatar_url")
+  role               UserRole             @default(student)
+  isActive           Boolean              @default(true) @map("is_active")
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  studentProfile     StudentProfile?
+  alumniProfile      AlumniProfile?
+  oauthConnections   OauthConnection[]
+  repositories       GithubRepository[]
+  ownedProjects      AcademicProject[]    @relation("ProjectOwner")
+  collaborations     ProjectCollaborator[]
+  endorsementsGiven  PeerEndorsement[]    @relation("Endorser")
+  endorsementsGot    PeerEndorsement[]    @relation("Endorsed")
+  teamRequests       TeamRequest[]
+  teamMatches        TeamMatch[]
+  sentInvitations    ProjectInvitation[]  @relation("InvitationSender")
+  receivedInvites    ProjectInvitation[]  @relation("InvitationRecipient")
+  notifications      SystemNotification[]
+  auditLogs          AuditLog[]
+
+  @@map("users")
+}
+
+model StudentProfile {
+  id                String                @id @default(uuid()) @db.Uuid
+  userId            String                @unique @map("user_id") @db.Uuid
+  studentIdNo       String?               @unique @map("student_id_no") @db.VarChar(50)
+  departmentId      String?               @map("department_id") @db.Uuid
+  universityId      String?               @map("university_id") @db.Uuid
+  graduationYear    Int?                  @map("graduation_year")
+  bio               String?
+  linkedinUrl       String?               @map("linkedin_url")
+  portfolioUrl      String?               @map("portfolio_url")
+  publicHandle      String                @unique @map("public_handle") @db.VarChar(100)
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department        Department?           @relation(fields: [departmentId], references: [id])
+  university        University?           @relation(fields: [universityId], references: [id])
+  portfolios        Portfolio[]
+  certifications    Certification[]
+  learningPaths     StudentLearningPath[]
+  mentorships       AlumniMentorship[]
+  resumeExports     ResumeExport[]
+  decayAudits       SkillDecayAudit[]
+  simulatedPaths    SimulatedPath[]
+
+  @@map("student_profiles")
+}
+
+model University {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String           @db.VarChar(200)
+  shortName       String           @map("short_name") @db.VarChar(20)
+  country         String?          @db.VarChar(100)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  departments     Department[]
+  studentProfiles StudentProfile[]
+  careerFairs     CareerFair[]
+
+  @@map("universities")
+}
+
+model Department {
+  id              String           @id @default(uuid()) @db.Uuid
+  universityId    String           @map("university_id") @db.Uuid
+  name            String           @db.VarChar(200)
+  code            String           @db.VarChar(10)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  university      University       @relation(fields: [universityId], references: [id])
+  studentProfiles StudentProfile[]
+
+  @@map("departments")
+}
+
+model OauthConnection {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  provider       String    @default("github") @db.VarChar(20)
+  accessTokenEnc String    @map("access_token_enc")
+  tokenScope     String?   @map("token_scope")
+  lastUsedAt     DateTime? @map("last_used_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("oauth_connections")
+}
+
+model AcademicProject {
+  id             String                @id @default(uuid()) @db.Uuid
+  title          String                @db.VarChar(300)
+  description    String?
+  ownerId        String                @map("owner_id") @db.Uuid
+  repoId         String?               @map("repo_id") @db.Uuid
+  startDate      DateTime?             @map("start_date") @db.Date
+  endDate        DateTime?             @map("end_date") @db.Date
+  isCapstone     Boolean               @default(false) @map("is_capstone")
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  owner          User                  @relation("ProjectOwner", fields: [ownerId], references: [id])
+  repository     GithubRepository?     @relation(fields: [repoId], references: [id])
+  collaborators  ProjectCollaborator[]
+  teamRequests   TeamRequest[]
+  invitations    ProjectInvitation[]
+
+  @@map("academic_projects")
+}
+
+model ProjectCollaborator {
+  id        String          @id @default(uuid()) @db.Uuid
+  projectId String          @map("project_id") @db.Uuid
+  userId    String          @map("user_id") @db.Uuid
+  role      String?         @db.VarChar(50)
+  joinedAt  DateTime        @default(now()) @map("joined_at") @db.Timestamptz(6)
+  project   AcademicProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User            @relation(fields: [userId], references: [id])
+
+  @@unique([projectId, userId])
+  @@map("project_collaborators")
+}
+
+model GithubRepository {
+  id             String            @id @default(uuid()) @db.Uuid
+  userId         String            @map("user_id") @db.Uuid
+  githubRepoId   BigInt            @unique @map("github_repo_id")
+  repoName       String            @map("repo_name") @db.VarChar(200)
+  fullName       String            @map("full_name") @db.VarChar(300)
+  description    String?
+  language       String?           @db.VarChar(50)
+  starsCount     Int               @default(0) @map("stars_count")
+  isFork         Boolean           @default(false) @map("is_fork")
+  rawReadmeText  String?           @map("raw_readme_text")
+  lastIngestedAt DateTime?         @map("last_ingested_at") @db.Timestamptz(6)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  user           User              @relation(fields: [userId], references: [id])
+  commits        GithubCommit[]
+  projects       AcademicProject[]
+
+  @@index([userId])
+  @@map("github_repositories")
+}
+
+model GithubCommit {
+  id          String           @id @default(uuid()) @db.Uuid
+  repoId      String           @map("repo_id") @db.Uuid
+  sha         String           @unique @db.VarChar(40)
+  message     String?
+  committedAt DateTime         @map("committed_at") @db.Timestamptz(6)
+  repository  GithubRepository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId])
+  @@map("github_commits")
+}
+
+model Portfolio {
+  id          String         @id @default(uuid()) @db.Uuid
+  studentId   String         @map("student_id") @db.Uuid
+  isPublic    Boolean        @default(true) @map("is_public")
+  viewCount   Int            @default(0) @map("view_count")
+  lastViewed  DateTime?      @map("last_viewed") @db.Timestamptz(6)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  student     StudentProfile @relation(fields: [studentId], references: [id])
+
+  @@map("portfolios")
+}
+
+model SkillCategory {
+  id       String  @id @default(uuid()) @db.Uuid
+  name     String  @unique @db.VarChar(100)
+  colorHex String? @map("color_hex") @db.VarChar(7)
+  iconName String? @map("icon_name") @db.VarChar(50)
+  skills   Skill[]
+
+  @@map("skill_categories")
+}
+
+model Skill {
+  id              String             @id @default(uuid()) @db.Uuid
+  name            String             @unique @db.VarChar(100)
+  categoryId      String?            @map("category_id") @db.Uuid
+  aliases         String[]           @default([])
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  category        SkillCategory?     @relation(fields: [categoryId], references: [id])
+  requirements    RoleRequirement[]
+  endorsements    PeerEndorsement[]
+  mentorships     AlumniMentorship[]
+
+  @@map("skills")
+}
+
+model IndustryRole {
+  id             String                @id @default(uuid()) @db.Uuid
+  title          String                @unique @db.VarChar(200)
+  description    String?
+  source         String                @default("LinkedIn + roadmap.sh curation") @db.VarChar(100)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  requirements   RoleRequirement[]
+  learningPaths  StudentLearningPath[]
+  resumeExports  ResumeExport[]
+  simulatedPaths SimulatedPath[]
+
+  @@map("industry_roles")
+}
+
+model RoleRequirement {
+  id          String       @id @default(uuid()) @db.Uuid
+  roleId      String       @map("role_id") @db.Uuid
+  skillId     String       @map("skill_id") @db.Uuid
+  criticality Float        @default(0.5)
+  role        IndustryRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  skill       Skill        @relation(fields: [skillId], references: [id])
+
+  @@unique([roleId, skillId])
+  @@map("role_requirements")
+}
+
+model LearningResource {
+  id                   String   @id @default(uuid()) @db.Uuid
+  title                String   @db.VarChar(300)
+  url                  String   @unique
+  type                 String   @db.VarChar(30)
+  provider             String?  @db.VarChar(100)
+  durationHours        Float?   @map("duration_hours")
+  isUniversityApproved Boolean  @default(false) @map("is_university_approved")
+  courseCode           String?  @map("course_code") @db.VarChar(20)
+  rating               Float?
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("learning_resources")
+}
+
+model Certification {
+  id            String         @id @default(uuid()) @db.Uuid
+  studentId     String         @map("student_id") @db.Uuid
+  name          String         @db.VarChar(200)
+  issuer        String?        @db.VarChar(100)
+  issuedDate    DateTime?      @map("issued_date") @db.Date
+  expiryDate    DateTime?      @map("expiry_date") @db.Date
+  credentialUrl String?        @map("credential_url")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  student       StudentProfile @relation(fields: [studentId], references: [id])
+
+  @@map("certifications")
+}
+
+model StudentLearningPath {
+  id                String         @id @default(uuid()) @db.Uuid
+  studentId         String         @map("student_id") @db.Uuid
+  roleId            String         @map("role_id") @db.Uuid
+  completionPct     Float          @default(0) @map("completion_pct")
+  missingSkillsJson Json?          @map("missing_skills_json")
+  roadmapJson       Json?          @map("roadmap_json")
+  isActive          Boolean        @default(true) @map("is_active")
+  lastComputedAt    DateTime?      @map("last_computed_at") @db.Timestamptz(6)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  student           StudentProfile @relation(fields: [studentId], references: [id])
+  role              IndustryRole   @relation(fields: [roleId], references: [id])
+
+  @@map("student_learning_paths")
+}
+
+model PeerEndorsement {
+  id         String   @id @default(uuid()) @db.Uuid
+  endorserId String   @map("endorser_id") @db.Uuid
+  endorsedId String   @map("endorsed_id") @db.Uuid
+  skillId    String   @map("skill_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  endorser   User     @relation("Endorser", fields: [endorserId], references: [id])
+  endorsed   User     @relation("Endorsed", fields: [endorsedId], references: [id])
+  skill      Skill    @relation(fields: [skillId], references: [id])
+
+  @@unique([endorserId, endorsedId, skillId])
+  @@map("peer_endorsements")
+}
+
+model TeamRequest {
+  id             String          @id @default(uuid()) @db.Uuid
+  projectId      String          @map("project_id") @db.Uuid
+  requesterId    String          @map("requester_id") @db.Uuid
+  requiredSkills Json            @map("required_skills")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  project        AcademicProject @relation(fields: [projectId], references: [id])
+  requester      User            @relation(fields: [requesterId], references: [id])
+  matches        TeamMatch[]
+
+  @@map("team_requests")
+}
+
+model TeamMatch {
+  id          String      @id @default(uuid()) @db.Uuid
+  requestId   String      @map("request_id") @db.Uuid
+  matchedUser String      @map("matched_user") @db.Uuid
+  matchScore  Float?      @map("match_score")
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  request     TeamRequest @relation(fields: [requestId], references: [id])
+  user        User        @relation(fields: [matchedUser], references: [id])
+
+  @@map("team_matches")
+}
+
+model ProjectInvitation {
+  id          String           @id @default(uuid()) @db.Uuid
+  projectId   String           @map("project_id") @db.Uuid
+  fromUserId  String           @map("from_user_id") @db.Uuid
+  toUserId    String           @map("to_user_id") @db.Uuid
+  status      InvitationStatus @default(pending)
+  respondedAt DateTime?        @map("responded_at") @db.Timestamptz(6)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  project     AcademicProject  @relation(fields: [projectId], references: [id])
+  fromUser    User             @relation("InvitationSender", fields: [fromUserId], references: [id])
+  toUser      User             @relation("InvitationRecipient", fields: [toUserId], references: [id])
+
+  @@unique([projectId, toUserId])
+  @@map("project_invitations")
+}
+
+model SystemNotification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  type      String   @db.VarChar(50)
+  payload   Json
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@map("system_notifications")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  action    String   @db.VarChar(100)
+  entity    String?  @db.VarChar(100)
+  entityId  String?  @map("entity_id") @db.Uuid
+  metadata  Json?
+  ipAddress String?  @map("ip_address") @db.Inet
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
+
+model CareerFair {
+  id           String            @id @default(uuid()) @db.Uuid
+  universityId String            @map("university_id") @db.Uuid
+  name         String            @db.VarChar(200)
+  eventDate    DateTime          @map("event_date") @db.Date
+  location     String?           @db.VarChar(300)
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  university   University        @relation(fields: [universityId], references: [id])
+  booths       CareerFairBooth[]
+
+  @@map("career_fairs")
+}
+
+model CareerFairBooth {
+  id             String     @id @default(uuid()) @db.Uuid
+  fairId         String     @map("fair_id") @db.Uuid
+  companyName    String     @map("company_name") @db.VarChar(200)
+  requiredSkills Json       @map("required_skills")
+  hiringRoles    String[]   @default([]) @map("hiring_roles")
+  boothNumber    String?    @map("booth_number") @db.VarChar(10)
+  createdAt      DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  fair           CareerFair @relation(fields: [fairId], references: [id])
+
+  @@map("career_fair_booths")
+}
+
+model AlumniProfile {
+  id              String              @id @default(uuid()) @db.Uuid
+  userId          String              @unique @map("user_id") @db.Uuid
+  graduationYear  Int?                @map("graduation_year")
+  currentCompany  String?             @map("current_company") @db.VarChar(200)
+  currentRole     String?             @map("current_role") @db.VarChar(200)
+  yearsExperience Int?                @map("years_experience")
+  mentoringSkills String[]            @default([]) @map("mentoring_skills")
+  willingToMentor Boolean             @default(false) @map("willing_to_mentor")
+  linkedinUrl     String?             @map("linkedin_url")
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  user            User                @relation(fields: [userId], references: [id])
+  mentorships     AlumniMentorship[]
+
+  @@map("alumni_profiles")
+}
+
+model AlumniMentorship {
+  id        String           @id @default(uuid()) @db.Uuid
+  studentId String           @map("student_id") @db.Uuid
+  alumniId  String           @map("alumni_id") @db.Uuid
+  skillId   String           @map("skill_id") @db.Uuid
+  status    MentorshipStatus @default(requested)
+  startedAt DateTime?        @map("started_at") @db.Timestamptz(6)
+  endedAt   DateTime?        @map("ended_at") @db.Timestamptz(6)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  student   StudentProfile   @relation(fields: [studentId], references: [id])
+  alumni    AlumniProfile    @relation(fields: [alumniId], references: [id])
+  skill     Skill            @relation(fields: [skillId], references: [id])
+
+  @@map("alumni_mentorships")
+}
+
+model ResumeExport {
+  id        String          @id @default(uuid()) @db.Uuid
+  studentId String          @map("student_id") @db.Uuid
+  roleId    String?         @map("role_id") @db.Uuid
+  filePath  String?         @map("file_path")
+  atsScore  Float?          @map("ats_score")
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  student   StudentProfile  @relation(fields: [studentId], references: [id])
+  role      IndustryRole?   @relation(fields: [roleId], references: [id])
+
+  @@map("resume_exports")
+}
+
+model SkillDecayAudit {
+  id             String         @id @default(uuid()) @db.Uuid
+  studentId      String         @map("student_id") @db.Uuid
+  skillName      String         @map("skill_name") @db.VarChar(100)
+  currentWeight  Float          @map("current_weight")
+  lastActiveDate DateTime       @map("last_active_date") @db.Timestamptz(6)
+  lastDecayedAt  DateTime?      @map("last_decayed_at") @db.Timestamptz(6)
+  isDormant      Boolean        @default(false) @map("is_dormant")
+  decayCycles    Int            @default(0) @map("decay_cycles")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  student        StudentProfile @relation(fields: [studentId], references: [id])
+
+  @@unique([studentId, skillName])
+  @@map("skill_decay_audits")
+}
+
+model SimulatedPath {
+  id                 String         @id @default(uuid()) @db.Uuid
+  studentId          String         @map("student_id") @db.Uuid
+  scenarioName       String?        @map("scenario_name") @db.VarChar(200)
+  targetRoleId       String?        @map("target_role_id") @db.Uuid
+  hypotheticalSkills Json           @map("hypothetical_skills")
+  simulatedResult    Json           @map("simulated_result")
+  completionDelta    Float?         @map("completion_delta")
+  weeksSaved         Int?           @map("weeks_saved")
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  student            StudentProfile @relation(fields: [studentId], references: [id])
+  targetRole         IndustryRole?  @relation(fields: [targetRoleId], references: [id])
+
+  @@map("simulated_paths")
+}

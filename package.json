@@ -1,0 +1,34 @@
+{
+  "name": "skillgraph",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Academic-to-Industry Career GPS platform monorepo.",
+  "workspaces": [
+    "packages/*",
+    "gateway",
+    "graph-service",
+    "notification-service",
+    "decay-worker",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "docker compose up --build",
+    "dev:gateway": "npm --workspace gateway run dev",
+    "dev:graph": "npm --workspace graph-service run dev",
+    "dev:notification": "npm --workspace notification-service run dev",
+    "dev:decay": "npm --workspace decay-worker run dev",
+    "dev:frontend": "npm --workspace frontend run dev",
+    "db:build": "npm --workspace @skillgraph/database run build",
+    "db:generate": "npm --workspace @skillgraph/database run prisma:generate",
+    "db:migrate": "npm --workspace @skillgraph/database run prisma:migrate",
+    "db:migrate:docker": "docker compose run --rm gateway npm --workspace @skillgraph/database run prisma:migrate",
+    "db:deploy": "npm --workspace @skillgraph/database run prisma:deploy",
+    "db:seed": "npm --workspace @skillgraph/database run db:seed",
+    "db:seed:docker": "docker compose run --rm gateway npm --workspace @skillgraph/database run db:seed",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
