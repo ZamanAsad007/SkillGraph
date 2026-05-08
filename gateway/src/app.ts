@@ -1,3 +1,4 @@
+import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -10,7 +11,13 @@ export const app = express();
 app.use(helmet());
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
+app.use(cookieParser());
 app.use(publicLimiter);
+
+app.get("/favicon.ico", (_req, res) => {
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.status(204).end();
+});
 
 app.get("/health", (_req, res) => {
   res.json({ success: true, data: { service: "gateway", status: "ok" } });
