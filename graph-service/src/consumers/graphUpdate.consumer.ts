@@ -1,0 +1,158 @@
+import { Redis } from "ioredis";
+import { env } from "../config/env.js";
+import { runWrite } from "../neo4j/driver.js";
+
+const STREAM_KEY = "graph:update:queue";
+const CONSUMER_GROUP = "graph-service";
+const CONSUMER_NAME = `graph-service-${process.pid}`;
+const BLOCK_MS = 5000;
+const BATCH_SIZE = 10;
+
+interface ExtractedSkill {
+  skill_name: string;
+  confidence: number;
+  source_repos: string[];
+}
+
+interface GraphUpdateMessage {
+  student_id: string;
+  extracted_skills: ExtractedSkill[];
+}
+
+async function ensureConsumerGroup(redis: Redis): Promise<void> {
+  try {
+    await redis.xgroup("CREATE", STREAM_KEY, CONSUMER_GROUP, "0", "MKSTREAM");
+  } catch (err: unknown) {
+    // BUSYGROUP means the group already exists — that's fine
+    if (err instanceof Error && !err.message.includes("BUSYGROUP")) {
+      throw err;
+    }
+  }
+}
+
+async function processMessage(message: GraphUpdateMessage): Promise<void> {
+  const { student_id, extracted_skills } = message;
+
+  if (!student_id || !Array.isArray(extracted_skills)) {
+    console.warn("[graphUpdate.consumer] Skipping malformed message:", message);
+    return;
+  }
+
+  // Upsert Student node
+  await runWrite(
+    `
+    MERGE (s:Student {id: $studentId})
+    SET s.updatedAt = timestamp()
+    `,
+    { studentId: student_id }
+  );
+
+  // Upsert each Skill node and KNOWS edge
+  for (const skill of extracted_skills) {
+    const { skill_name, confidence, source_repos } = skill;
+    if (!skill_name) continue;
+
+    // proficiency = confidence (base; endorsements boost it later)
+    const proficiency = confidence;
+    const lastActive = Date.now();
+
+    await runWrite(
+      `
+      MERGE (sk:Skill {name: $skillName})
+      ON CREATE SET sk.category = 'Uncategorized'
+      WITH sk
+      MATCH (s:Student {id: $studentId})
+      MERGE (s)-[r:KNOWS]->(sk)
+      SET r.confidence = $confidence,
+          r.proficiency = $proficiency,
+          r.endorsementCount = coalesce(r.endorsementCount, 0),
+          r.lastActive = $lastActive,
+          r.dormant = false,
+          r.sourceRepos = $sourceRepos
+      `,
+      {
+        studentId: student_id,
+        skillName: skill_name,
+        confidence,
+        proficiency,
+        lastActive,
+        sourceRepos: source_repos ?? []
+      }
+    );
+  }
+
+  console.log(
+    `[graphUpdate.consumer] Synced ${extracted_skills.length} skills for student ${student_id}`
+  );
+}
+
+export async function startGraphUpdateConsumer(): Promise<void> {
+  const redis = new Redis(env.REDIS_URL);
+
+  await ensureConsumerGroup(redis);
+  console.log(
+    `[graphUpdate.consumer] Listening on stream "${STREAM_KEY}" as group "${CONSUMER_GROUP}"`
+  );
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      const results = await redis.xreadgroup(
+        "GROUP",
+        CONSUMER_GROUP,
+        CONSUMER_NAME,
+        "COUNT",
+        BATCH_SIZE,
+        "BLOCK",
+        BLOCK_MS,
+        "STREAMS",
+        STREAM_KEY,
+        ">"
+      );
+
+      if (!results) continue;
+
+      for (const [, entries] of results as [string, [string, string[]][]][]) {
+        for (const [messageId, fields] of entries) {
+          // Redis XREADGROUP returns fields as a flat [key, value, key, value, ...] array
+          const fieldMap: Record<string, string> = {};
+          for (let i = 0; i < fields.length; i += 2) {
+            fieldMap[fields[i]] = fields[i + 1];
+          }
+
+          let parsed: GraphUpdateMessage | null = null;
+          try {
+            // The NLP service publishes the payload as a JSON string in the "data" field
+            const raw = fieldMap["data"] ?? fieldMap["payload"] ?? JSON.stringify(fieldMap);
+            parsed = JSON.parse(raw) as GraphUpdateMessage;
+          } catch {
+            console.error(
+              `[graphUpdate.consumer] Failed to parse message ${messageId}:`,
+              fieldMap
+            );
+          }
+
+          if (parsed) {
+            try {
+              await processMessage(parsed);
+            } catch (err) {
+              console.error(
+                `[graphUpdate.consumer] Error processing message ${messageId}:`,
+                err
+              );
+              // Don't ACK — leave for retry / dead-letter handling
+              continue;
+            }
+          }
+
+          // ACK the message so it won't be redelivered
+          await redis.xack(STREAM_KEY, CONSUMER_GROUP, messageId);
+        }
+      }
+    } catch (err) {
+      console.error("[graphUpdate.consumer] Stream read error:", err);
+      // Brief pause before retrying to avoid tight error loops
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
