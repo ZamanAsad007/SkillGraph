@@ -1,11 +1,580 @@
+import { isAxiosError } from "axios";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Clock,
+  GitBranch,
+  History,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Target,
+  TrendingUp
+} from "lucide-react";
+import { IngestionStatusBanner } from "../components/galaxy/IngestionStatusBanner";
 import { SkillGalaxy } from "../components/galaxy/SkillGalaxy";
 import { SkillDetailPanel } from "../components/galaxy/SkillDetailPanel";
+import type { GalaxyNode } from "../services/graph.service";
+import { triggerIngestion, getIngestionStatus } from "../services/graph.service";
+import { getCurrentUser } from "../services/auth.service";
+import { useAuthStore } from "../store/auth.store";
+import { useGalaxy } from "../hooks/useGalaxy";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+type IngestionStatus = {
+  status: "queued" | "processing" | "completed" | "failed" | "rate_limited" | "not_started";
+  repositoryCount?: number;
+  skillsFound?: number;
+  manualIngestionAvailableAt?: string;
+  message?: string;
+  error?: string;
+};
+
+type DashboardAction = {
+  title: string;
+  detail: string;
+  priority: "high" | "medium" | "low";
+  cta: string;
+  href?: string;
+  onClick?: () => void;
+};
+
+function formatCooldown(milliseconds: number) {
+  const totalMinutes = Math.max(1, Math.ceil(milliseconds / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+function getRetryAfterAvailableAt(retryAfter?: string) {
+  if (!retryAfter) return undefined;
+
+  const retryAfterSeconds = Number(retryAfter);
+  if (!Number.isNaN(retryAfterSeconds)) {
+    return new Date(Date.now() + retryAfterSeconds * 1000).toISOString();
+  }
+
+  const retryAfterDate = Date.parse(retryAfter);
+  return Number.isNaN(retryAfterDate) ? undefined : new Date(retryAfterDate).toISOString();
+}
+
+function isSkillNode(node: GalaxyNode) {
+  return Boolean(
+    node.labels?.includes("Skill") ||
+    node.category ||
+    typeof node.confidence === "number" ||
+    typeof node.proficiency === "number" ||
+    typeof node.endorsementCount === "number"
+  );
+}
+
+function getConfidence(node: GalaxyNode) {
+  return Number(node.confidence ?? node.proficiency ?? 0);
+}
 
 export function Dashboard() {
+  const { userId, fullName, publicHandle, setUser } = useAuthStore();
+  const [selectedNode, setSelectedNode] = useState<GalaxyNode | null>(null);
+  const [ingesting, setIngesting] = useState(false);
+  const [ingestionStatus, setIngestionStatus] = useState<IngestionStatus | null>(null);
+  const [searchFilter, setSearchFilter] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  const [statusPollVersion, setStatusPollVersion] = useState(0);
+  const [manualCooldownUntil, setManualCooldownUntil] = useState<string>();
+  const galaxy = useGalaxy({ studentId: userId });
+  const { nodes, links, error: galaxyError, refresh } = galaxy;
+  const skillNodes = useMemo(() => nodes.filter(isSkillNode), [nodes]);
+  const activeSkills = skillNodes.filter((node) => node.name && !node.dormant).length;
+  const dormantSkills = skillNodes.filter((node) => node.dormant).length;
+  const endorsedSkills = skillNodes.filter((node) => node.endorsed).length;
+  const weakSkills = skillNodes.filter((node) => !node.dormant && getConfidence(node) > 0 && getConfidence(node) < 0.65).length;
+  const noEvidenceSkills = skillNodes.filter((node) => !node.endorsed && (!node.sourceRepos || node.sourceRepos.length === 0)).length;
+  const projectEvidenceSkills = skillNodes.filter((node) => (node.sourceRepos?.length ?? 0) > 0).length;
+  const highConfidenceSkills = skillNodes.filter((node) => getConfidence(node) >= 0.8).length;
+  const cooldownUntil = manualCooldownUntil
+    ? Date.parse(manualCooldownUntil)
+    : undefined;
+  const cooldownMs = cooldownUntil && cooldownUntil > now ? cooldownUntil - now : 0;
+  const scanDisabled = ingesting || cooldownMs > 0;
+  const evidenceScore = skillNodes.length > 0
+    ? Math.round(((endorsedSkills * 0.45) + (projectEvidenceSkills * 0.35) + (highConfidenceSkills * 0.2)) / skillNodes.length * 100)
+    : 0;
+  const healthScore = skillNodes.length > 0
+    ? Math.max(0, Math.round(((activeSkills - weakSkills * 0.5 - dormantSkills) / skillNodes.length) * 100))
+    : 0;
+  const recentSkillEvidence = useMemo(() => (
+    skillNodes
+      .filter((node) => node.name)
+      .sort((a, b) => {
+        const repoDelta = (b.sourceRepos?.length ?? 0) - (a.sourceRepos?.length ?? 0);
+        if (repoDelta !== 0) return repoDelta;
+        return getConfidence(b) - getConfidence(a);
+      })
+      .slice(0, 5)
+  ), [skillNodes]);
+  const actionItems = useMemo<DashboardAction[]>(() => {
+    const actions: DashboardAction[] = [];
+
+    if (skillNodes.length === 0) {
+      actions.push({
+        title: "Scan GitHub to build your skill graph",
+        detail: "No usable skill evidence is mapped yet.",
+        priority: "high",
+        cta: "Scan now",
+        onClick: handleIngest
+      });
+    }
+
+    if (weakSkills > 0) {
+      actions.push({
+        title: "Strengthen weak skills",
+        detail: `${weakSkills} active skills have low confidence evidence.`,
+        priority: "medium",
+        cta: "Inspect graph"
+      });
+    }
+
+    if (noEvidenceSkills > 0) {
+      actions.push({
+        title: "Add evidence or endorsements",
+        detail: `${noEvidenceSkills} skills lack repo or peer proof.`,
+        priority: "medium",
+        cta: "Request endorsements",
+        href: "/notifications"
+      });
+    }
+
+    if (dormantSkills > 0) {
+      actions.push({
+        title: "Revive dormant skills",
+        detail: `${dormantSkills} skills appear inactive and may decay.`,
+        priority: "low",
+        cta: "Plan refresh"
+      });
+    }
+
+    return actions.slice(0, 5);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dormantSkills, noEvidenceSkills, skillNodes.length, weakSkills]);
+
+  useEffect(() => {
+    void getCurrentUser().then((user) => {
+      console.log("[Dashboard] Got user:", user);
+      setUser(user);
+    }).catch(() => {
+      window.location.href = "/login";
+    });
+  }, [setUser]);
+
+  useEffect(() => {
+    if (!userId) return;
+
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const pollStatus = async () => {
+      try {
+        const status = await getIngestionStatus(userId);
+        if (cancelled) return;
+
+        if (status.manualIngestionAvailableAt) {
+          setManualCooldownUntil(status.manualIngestionAvailableAt);
+        }
+
+        setIngestionStatus((current) => {
+          const currentCooldownUntil = current?.manualIngestionAvailableAt
+            ? Date.parse(current.manualIngestionAvailableAt)
+            : undefined;
+          const currentCooldownActive = currentCooldownUntil ? currentCooldownUntil > Date.now() : false;
+
+          if (current?.status === "rate_limited" && currentCooldownActive && (status.status === "queued" || status.status === "processing")) {
+            return current;
+          }
+
+          return status;
+        });
+
+        if (status.status === "queued" || status.status === "processing") {
+          setIngesting(true);
+          timeoutId = setTimeout(pollStatus, 3000);
+        } else if (status.status === "completed") {
+          setIngesting(false);
+          await refresh();
+        } else {
+          setIngesting(false);
+        }
+      } catch (error) {
+        console.error("Failed to fetch ingestion status:", error);
+        if (!cancelled) setIngesting(false);
+      }
+    };
+
+    void pollStatus();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [userId, refresh, statusPollVersion]);
+
+  useEffect(() => {
+    if (cooldownMs <= 0) return;
+
+    const intervalId = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(intervalId);
+  }, [cooldownMs]);
+
+  useEffect(() => {
+    if (manualCooldownUntil && cooldownMs <= 0) {
+      setManualCooldownUntil(undefined);
+    }
+  }, [cooldownMs, manualCooldownUntil]);
+
+  async function handleIngest() {
+    if (cooldownMs > 0) {
+      setIngestionStatus((current) => ({
+        ...current,
+        status: "rate_limited",
+        message: `Scan is available again in ${formatCooldown(cooldownMs)}.`
+      }));
+      return;
+    }
+
+    setIngesting(true);
+    setIngestionStatus(null);
+    try {
+      const result = await triggerIngestion();
+      const nextManualCooldownUntil =
+        result.manualIngestionAvailableAt ?? new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+      setManualCooldownUntil(nextManualCooldownUntil);
+      setIngestionStatus({
+        status: result.status,
+        repositoryCount: result.repositoryCount,
+        skillsFound: result.skillsFound,
+        manualIngestionAvailableAt: nextManualCooldownUntil
+      });
+      setStatusPollVersion((version) => version + 1);
+    } catch (error) {
+      if (isAxiosError(error) && error.response?.status === 429) {
+        const nextManualCooldownUntil =
+          error.response.data?.data?.manualIngestionAvailableAt ??
+          getRetryAfterAvailableAt(error.response.headers["retry-after"]) ??
+          new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+        setManualCooldownUntil(nextManualCooldownUntil);
+        setIngestionStatus({
+          status: "rate_limited",
+          manualIngestionAvailableAt: nextManualCooldownUntil,
+          message: error.response.data?.error?.message ?? "Please wait before triggering another scan."
+        });
+        setIngesting(false);
+        return;
+      }
+
+      setIngestionStatus({
+        status: "failed",
+        error: error instanceof Error ? error.message : "Ingestion failed"
+      });
+      setIngesting(false);
+    }
+  }
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
-      <SkillGalaxy />
-      <SkillDetailPanel />
+    <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-[1720px] flex-col gap-4 pb-20 lg:pb-4">
+      <header className="flex flex-col gap-3 rounded-lg border border-[#dfe3ea] bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.08em] text-[#626f86]">
+            <Sparkles className="size-3.5 text-[#0c66e4]" />
+            Skill workspace
+          </div>
+          <h1 className="mt-1 truncate text-2xl font-semibold tracking-tight text-[#17202a]">
+            {fullName ? `${fullName}'s skills` : "Your skills"}
+          </h1>
+          {publicHandle && (
+            <p className="mt-1 text-sm text-[#626f86]">Public galaxy: /galaxy/{publicHandle}</p>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-[#626f86]" />
+            <Input
+              type="text"
+              placeholder="Search skills"
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+              className="h-9 border-[#cfd7e3] bg-[#f7f8fa] pl-8"
+            />
+          </div>
+
+          <Button
+            onClick={handleIngest}
+            disabled={scanDisabled}
+            size="lg"
+            className="gap-2 bg-[#0c66e4] text-white hover:bg-[#0055cc]"
+          >
+            {ingesting ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
+            {ingesting
+              ? "Scanning..."
+              : cooldownMs > 0
+              ? `Scan in ${formatCooldown(cooldownMs)}`
+              : "Scan GitHub"}
+          </Button>
+        </div>
+      </header>
+
+      {(ingestionStatus || galaxyError) && (
+        <IngestionStatusBanner
+          status={ingestionStatus?.status}
+          message={ingestionStatus?.message}
+          error={ingestionStatus?.error || galaxyError}
+          repositoryCount={ingestionStatus?.repositoryCount}
+          skillsFound={ingestionStatus?.skillsFound}
+        />
+      )}
+
+      <section className="grid gap-3 md:grid-cols-3">
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-3 shadow-sm">
+          <CardContent className="flex items-center justify-between px-4">
+            <div>
+              <p className="text-xs font-medium text-[#626f86]">Skills mapped</p>
+              <p className="mt-1 text-2xl font-semibold text-[#17202a]">{nodes.length}</p>
+            </div>
+            <div className="grid size-9 place-items-center rounded-lg bg-[#e9f2ff] text-[#0c66e4]">
+              <GitBranch className="size-4" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-3 shadow-sm">
+          <CardContent className="flex items-center justify-between px-4">
+            <div>
+              <p className="text-xs font-medium text-[#626f86]">Active skills</p>
+              <p className="mt-1 text-2xl font-semibold text-[#17202a]">{activeSkills}</p>
+            </div>
+            <div className="grid size-9 place-items-center rounded-lg bg-[#e7f8ef] text-[#1f845a]">
+              <Sparkles className="size-4" />
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-3 shadow-sm">
+          <CardContent className="flex items-center justify-between px-4">
+            <div>
+              <p className="text-xs font-medium text-[#626f86]">Endorsed</p>
+              <p className="mt-1 text-2xl font-semibold text-[#17202a]">{endorsedSkills}</p>
+            </div>
+            <div className="grid size-9 place-items-center rounded-lg bg-[#fff4e5] text-[#974f0c]">
+              <ShieldCheck className="size-4" />
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-4">
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-0 shadow-sm">
+          <CardHeader className="border-b border-[#edf0f5] px-4 py-3">
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold text-[#17202a]">
+              <Target className="size-4 text-[#0c66e4]" />
+              Next actions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 p-4 md:grid-cols-2">
+            {actionItems.length === 0 ? (
+              <div className="rounded-lg border border-[#dfe3ea] bg-[#f7f8fa] p-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="size-4 text-[#1f845a]" />
+                  <p className="text-sm font-semibold text-[#17202a]">No urgent action</p>
+                </div>
+                <p className="mt-2 text-sm text-[#626f86]">Your graph has enough evidence for now. Keep building and scan after meaningful work.</p>
+              </div>
+            ) : (
+              actionItems.map((action) => (
+                <div key={action.title} className="rounded-lg border border-[#dfe3ea] bg-[#f7f8fa] p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className={
+                        action.priority === "high"
+                          ? "rounded-md bg-[#ffebe6] px-2 py-1 text-xs font-medium text-[#ae2a19]"
+                          : action.priority === "medium"
+                          ? "rounded-md bg-[#fff4e5] px-2 py-1 text-xs font-medium text-[#974f0c]"
+                          : "rounded-md bg-[#e9f2ff] px-2 py-1 text-xs font-medium text-[#0c66e4]"
+                      }>
+                        {action.priority}
+                      </span>
+                      <h3 className="mt-3 text-sm font-semibold text-[#17202a]">{action.title}</h3>
+                      <p className="mt-1 text-sm leading-5 text-[#626f86]">{action.detail}</p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-3 w-full justify-between"
+                    onClick={() => {
+                      if (action.onClick) action.onClick();
+                      if (action.href) window.location.href = action.href;
+                    }}
+                    disabled={action.onClick === handleIngest && scanDisabled}
+                  >
+                    {action.cta}
+                    <ArrowRight className="size-4" />
+                  </Button>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-0 shadow-sm">
+          <CardHeader className="border-b border-[#edf0f5] px-4 py-3">
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold text-[#17202a]">
+              <Activity className="size-4 text-[#1f845a]" />
+              Skill health
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="flex items-end justify-between">
+              <div>
+                <p className="text-3xl font-semibold text-[#17202a]">{healthScore}%</p>
+                <p className="mt-1 text-sm text-[#626f86]">active, current, and confident</p>
+              </div>
+              {healthScore < 60 ? (
+                <AlertTriangle className="size-8 text-[#974f0c]" />
+              ) : (
+                <CheckCircle2 className="size-8 text-[#1f845a]" />
+              )}
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2">
+              <div className="rounded-lg bg-[#f7f8fa] p-2">
+                <p className="text-xs text-[#626f86]">Active</p>
+                <p className="text-lg font-semibold text-[#17202a]">{activeSkills}</p>
+              </div>
+              <div className="rounded-lg bg-[#f7f8fa] p-2">
+                <p className="text-xs text-[#626f86]">Weak</p>
+                <p className="text-lg font-semibold text-[#17202a]">{weakSkills}</p>
+              </div>
+              <div className="rounded-lg bg-[#f7f8fa] p-2">
+                <p className="text-xs text-[#626f86]">Dormant</p>
+                <p className="text-lg font-semibold text-[#17202a]">{dormantSkills}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-0 shadow-sm">
+          <CardHeader className="border-b border-[#edf0f5] px-4 py-3">
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold text-[#17202a]">
+              <BarChart3 className="size-4 text-[#0c66e4]" />
+              Evidence quality
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="flex items-end justify-between">
+              <div>
+                <p className="text-3xl font-semibold text-[#17202a]">{evidenceScore}%</p>
+                <p className="mt-1 text-sm text-[#626f86]">weighted repo, endorsement, confidence proof</p>
+              </div>
+              <ShieldCheck className="size-8 text-[#0c66e4]" />
+            </div>
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#626f86]">Repo-backed skills</span>
+                <span className="font-semibold text-[#17202a]">{projectEvidenceSkills}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#626f86]">Peer-endorsed skills</span>
+                <span className="font-semibold text-[#17202a]">{endorsedSkills}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#626f86]">No evidence</span>
+                <span className="font-semibold text-[#17202a]">{noEvidenceSkills}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-0 shadow-sm">
+          <CardHeader className="border-b border-[#edf0f5] px-4 py-3">
+            <CardTitle className="flex items-center gap-2 text-sm font-semibold text-[#17202a]">
+              <History className="size-4 text-[#974f0c]" />
+              Recent skill changes
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="rounded-lg border border-[#dfe3ea] bg-[#f7f8fa] p-3">
+              <div className="flex items-center gap-2">
+                <Clock className="size-4 text-[#626f86]" />
+                <p className="text-sm font-semibold text-[#17202a]">
+                  {ingestionStatus?.status === "completed"
+                    ? "Latest scan completed"
+                    : ingestionStatus?.status === "processing" || ingestionStatus?.status === "queued"
+                    ? "Scan in progress"
+                    : "No scan update in this session"}
+                </p>
+              </div>
+              {(ingestionStatus?.repositoryCount || ingestionStatus?.skillsFound) && (
+                <p className="mt-2 text-sm text-[#626f86]">
+                  {ingestionStatus.repositoryCount ?? 0} repos checked, {ingestionStatus.skillsFound ?? 0} skills found.
+                </p>
+              )}
+            </div>
+            <div className="mt-3 space-y-2">
+              {recentSkillEvidence.length === 0 ? (
+                <p className="text-sm text-[#626f86]">Scan GitHub to see recently evidenced skills.</p>
+              ) : (
+                recentSkillEvidence.map((skill) => (
+                  <div key={skill.id} className="flex items-center justify-between gap-3 rounded-lg border border-[#dfe3ea] px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-[#17202a]">{skill.name}</p>
+                      <p className="text-xs text-[#626f86]">{skill.sourceRepos?.length ?? 0} repo signals</p>
+                    </div>
+                    <span className="text-xs font-semibold text-[#0c66e4]">{Math.round(getConfidence(skill) * 100)}%</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <Card className="min-h-[640px] rounded-lg border-[#dfe3ea] bg-white py-0 shadow-sm">
+          <CardHeader className="border-b border-[#edf0f5] px-4 py-3">
+            <CardTitle className="text-sm font-semibold text-[#17202a]">Skill galaxy</CardTitle>
+          </CardHeader>
+          <CardContent className="p-3">
+            <SkillGalaxy
+              data={{ nodes, links }}
+              onSelect={setSelectedNode}
+              searchFilter={searchFilter}
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg border-[#dfe3ea] bg-white py-0 shadow-sm xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)]">
+          <CardHeader className="border-b border-[#edf0f5] px-4 py-3">
+            <CardTitle className="text-sm font-semibold text-[#17202a]">Inspector</CardTitle>
+          </CardHeader>
+          <CardContent className="min-h-[420px] overflow-auto p-4">
+            <SkillDetailPanel node={selectedNode} />
+          </CardContent>
+        </Card>
+      </section>
     </div>
   );
 }
