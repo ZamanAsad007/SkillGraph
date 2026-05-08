@@ -1,5 +1,63 @@
-import type { LucideIcon } from "lucide-react";
+import { Bell } from "lucide-react";
+import { useEffect, useState } from "react";
+import { api } from "../../services/api";
+import { useSocket } from "../../hooks/useSocket";
 
-export function NotificationBell({ icon: Icon }: { icon: LucideIcon }) {
-  return <button className="rounded p-2 hover:bg-slate-100" aria-label="Notifications"><Icon size={18} /></button>;
+type Notification = {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  isRead: boolean;
+  createdAt: string;
+};
+
+type NotificationBellProps = {
+  onToggle?: () => void;
+};
+
+export function NotificationBell({ onToggle }: NotificationBellProps) {
+  const [unreadCount, setUnreadCount] = useState(0);
+  const socket = useSocket();
+
+  const fetchUnreadCount = async () => {
+    try {
+      const response = await api.get<{ success: boolean; data: Notification[] }>("/notifications");
+      if (response.data.success) {
+        setUnreadCount(response.data.data.length);
+      }
+    } catch (error) {
+      console.error("Failed to fetch notifications:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchUnreadCount();
+
+    if (socket) {
+      socket.on("notification", () => {
+        fetchUnreadCount();
+      });
+    }
+
+    return () => {
+      if (socket) {
+        socket.off("notification");
+      }
+    };
+  }, [socket]);
+
+  return (
+    <button
+      className="relative rounded-md p-2 text-[#44546f] hover:bg-[#eef1f6] hover:text-[#17202a]"
+      aria-label="Notifications"
+      onClick={onToggle}
+    >
+      <Bell size={18} />
+      {unreadCount > 0 && (
+        <span className="absolute right-0 top-0 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-semibold text-white">
+          {unreadCount > 9 ? "9+" : unreadCount}
+        </span>
+      )}
+    </button>
+  );
 }
