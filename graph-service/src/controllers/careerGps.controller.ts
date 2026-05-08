@@ -1,0 +1,362 @@
+import { Request, Response } from "express";
+import { prisma } from "@skillgraph/database";
+import { runRead } from "../neo4j/driver.js";
+
+interface CareerGPSRequest {
+  studentId: string;
+  targetRoleId: string;
+}
+
+interface SaveGPSRequest extends CareerGPSRequest {
+  completionPercentage: number;
+  estimatedWeeks: number;
+  missingSkills?: unknown;
+  roadmap?: unknown;
+}
+
+type StudentSkillRecord = {
+  id: string | null;
+  name: string;
+  category: string;
+  proficiency: number;
+  confidence: number;
+};
+
+type RoadmapItem = {
+  skillId: string;
+  skillName: string;
+  category: string;
+  difficulty: number;
+  prerequisites: string[];
+  estimatedWeeks: number;
+  criticality: number;
+  objective: string;
+  practiceProject: string;
+  milestones: string[];
+  resources: Array<{
+    title: string;
+    type: string;
+    url?: string;
+  }>;
+};
+
+function difficultyFromCriticality(criticality: number, index: number) {
+  const scaled = Math.ceil(Math.max(0.2, Math.min(1, criticality)) * 5);
+  return Math.max(1, Math.min(5, scaled + (index % 2 === 0 ? 0 : -1)));
+}
+
+function estimateWeeks(difficulty: number, criticality = 0.8) {
+  return Math.max(1, Math.ceil(difficulty * (criticality >= 0.75 ? 1.2 : 0.9)));
+}
+
+function normalizeName(name: string) {
+  return name.trim().toLowerCase();
+}
+
+function getSkillResource(skillName: string, category: string) {
+  const resources: Record<string, Array<{ title: string; type: string; url?: string }>> = {
+    react: [{ title: "React official learning path", type: "Documentation", url: "https://react.dev/learn" }],
+    javascript: [{ title: "MDN JavaScript Guide", type: "Documentation", url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide" }],
+    typescript: [{ title: "TypeScript Handbook", type: "Documentation", url: "https://www.typescriptlang.org/docs/handbook/intro.html" }],
+    postgresql: [{ title: "PostgreSQL tutorial", type: "Documentation", url: "https://www.postgresql.org/docs/current/tutorial.html" }],
+    docker: [{ title: "Docker getting started", type: "Tutorial", url: "https://docs.docker.com/get-started/" }],
+    kubernetes: [{ title: "Kubernetes basics", type: "Tutorial", url: "https://kubernetes.io/docs/tutorials/kubernetes-basics/" }],
+    playwright: [{ title: "Playwright intro", type: "Documentation", url: "https://playwright.dev/docs/intro" }],
+    "owasp top 10": [{ title: "OWASP Top 10", type: "Reference", url: "https://owasp.org/www-project-top-ten/" }],
+    aws: [{ title: "AWS Skill Builder", type: "Course", url: "https://skillbuilder.aws/" }],
+    figma: [{ title: "Figma resource library", type: "Guide", url: "https://www.figma.com/resource-library/" }],
+    python: [{ title: "Python tutorial", type: "Documentation", url: "https://docs.python.org/3/tutorial/" }],
+    sql: [{ title: "SQLBolt lessons", type: "Interactive", url: "https://sqlbolt.com/" }]
+  };
+
+  const key = normalizeName(skillName);
+  return resources[key] ?? [{
+    title: `${category} focused practice plan`,
+    type: "Practice",
+    url: undefined
+  }];
+}
+
+function getRoadmapDetails(skillName: string, category: string, roleName: string, difficulty: number) {
+  const lowerName = normalizeName(skillName);
+  const categoryLower = normalizeName(category);
+  const objectiveByCategory: Record<string, string> = {
+    language: `Use ${skillName} confidently in production-style code, including syntax, debugging, and maintainable structure.`,
+    framework: `Build and integrate ${skillName} features that fit a real ${roleName} workflow.`,
+    database: `Model, query, and optimize data with ${skillName} for realistic application needs.`,
+    devops: `Use ${skillName} to package, deploy, or operate a service with repeatable commands.`,
+    cloud: `Deploy a small service using ${skillName} with clear access, networking, and cost boundaries.`,
+    testing: `Create dependable automated checks with ${skillName} and wire them into a team workflow.`,
+    security: `Identify risks covered by ${skillName} and document practical mitigations.`,
+    analytics: `Turn raw data into a decision-ready analysis using ${skillName}.`,
+    product: `Use ${skillName} to prioritize product work from evidence instead of guesses.`,
+    design: `Apply ${skillName} to produce interfaces that are usable, accessible, and implementation-ready.`,
+    "ml library": `Train, evaluate, and explain a small model using ${skillName}.`
+  };
+
+  const projectBySkill: Record<string, string> = {
+    react: "Build a role dashboard with filters, saved state, loading states, and responsive panels.",
+    "node.js": "Create an authenticated API with validation, pagination, logging, and clear error responses.",
+    postgresql: "Design a schema, seed realistic data, and write reporting queries with indexes.",
+    docker: "Containerize a frontend and API, then run them with a compose file and health checks.",
+    kubernetes: "Deploy a sample service with config, rollout, service discovery, and restart behavior.",
+    playwright: "Automate three core user journeys and run the suite as a CI quality gate.",
+    "owasp top 10": "Audit a demo app, rank three vulnerabilities, and write fixes with before/after notes.",
+    aws: "Deploy a small API or static app with IAM least privilege and a rollback plan.",
+    figma: "Design a compact product workflow, document states, and hand off component specs.",
+    sql: "Analyze a product funnel with joins, cohorts, and a concise recommendation.",
+    python: "Build a small data processing script with tests, CLI inputs, and clean outputs."
+  };
+
+  const milestones = [
+    `Explain the core ${skillName} concepts without notes.`,
+    `Build a focused mini-project and publish the source or screenshots.`,
+    `Add tests, documentation, or review notes that prove the skill is job-ready.`
+  ];
+
+  if (difficulty >= 4) {
+    milestones.push(`Complete one advanced ${skillName} exercise that includes tradeoffs and failure handling.`);
+  }
+
+  return {
+    objective: objectiveByCategory[categoryLower] ?? `Apply ${skillName} in a realistic ${roleName} task.`,
+    practiceProject: projectBySkill[lowerName] ?? `Build a ${roleName} portfolio artifact that demonstrates ${skillName}.`,
+    milestones,
+    resources: getSkillResource(skillName, category)
+  };
+}
+
+export async function getCareerGPS(req: Request, res: Response) {
+  try {
+    const { studentId, targetRoleId } = req.query as { studentId: string; targetRoleId: string };
+
+    if (!studentId || !targetRoleId) {
+      return res.status(400).json({
+        success: false,
+        error: { message: "studentId and targetRoleId are required" }
+      });
+    }
+
+    const role = await prisma.industryRole.findUnique({
+      where: { id: targetRoleId },
+      include: {
+        requirements: {
+          include: {
+            skill: {
+              include: { category: true }
+            }
+          },
+          orderBy: [{ criticality: "desc" }, { skill: { name: "asc" } }]
+        }
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        error: { message: "Role not found" }
+      });
+    }
+
+    const studentSkills = await runRead<StudentSkillRecord>(
+      `
+      MATCH (:Student {id: $studentId})-[knows:KNOWS]->(skill:Skill)
+      WHERE coalesce(knows.confidence, 0) >= 0.5
+        AND coalesce(knows.dormant, false) = false
+      RETURN coalesce(skill.id, null) AS id,
+             skill.name AS name,
+             coalesce(skill.category, 'Uncategorized') AS category,
+             coalesce(knows.proficiency, knows.confidence, 0.5) AS proficiency,
+             coalesce(knows.confidence, 0.5) AS confidence
+      ORDER BY confidence DESC, name ASC
+      `,
+      { studentId }
+    );
+
+    const studentSkillNames = new Set(studentSkills.map((skill) => normalizeName(skill.name)));
+    const requiredSkills = role.requirements.map((requirement, index) => {
+      const difficulty = difficultyFromCriticality(requirement.criticality, index);
+
+      return {
+        id: requirement.skill.id,
+        name: requirement.skill.name,
+        category: requirement.skill.category?.name ?? "Uncategorized",
+        learningDifficulty: difficulty,
+        criticality: requirement.criticality,
+        aliases: requirement.skill.aliases
+      };
+    });
+
+    const completedSkills = requiredSkills.filter((skill) => {
+      const names = [skill.name, ...skill.aliases].map(normalizeName);
+      return names.some((name) => studentSkillNames.has(name));
+    });
+
+    const missingSkills = requiredSkills.filter((skill) => {
+      const names = [skill.name, ...skill.aliases].map(normalizeName);
+      return !names.some((name) => studentSkillNames.has(name));
+    });
+
+    const roadmap: RoadmapItem[] = missingSkills.map((skill, index) => {
+      const details = getRoadmapDetails(skill.name, skill.category, role.title, skill.learningDifficulty);
+
+      return {
+        skillId: skill.id,
+        skillName: skill.name,
+        category: skill.category,
+        difficulty: skill.learningDifficulty,
+        prerequisites: index === 0 ? [] : missingSkills.slice(0, index).map((item) => item.name).slice(-2),
+        estimatedWeeks: estimateWeeks(skill.learningDifficulty, skill.criticality),
+        criticality: skill.criticality,
+        ...details
+      };
+    });
+
+    const estimatedWeeks = roadmap.reduce((sum, item) => sum + item.estimatedWeeks, 0);
+    const completionPercentage = requiredSkills.length > 0
+      ? Math.round((completedSkills.length / requiredSkills.length) * 100)
+      : 100;
+
+    return res.json({
+      success: true,
+      data: {
+        studentId,
+        targetRole: {
+          id: role.id,
+          name: role.title,
+          description: role.description
+        },
+        completionPercentage,
+        completedSkills,
+        missingSkills,
+        roadmap,
+        estimatedWeeks,
+        totalSkillsRequired: requiredSkills.length,
+        skillsCompleted: completedSkills.length,
+        skillsRemaining: missingSkills.length
+      }
+    });
+  } catch (error) {
+    console.error("Career GPS error:", error);
+    return res.status(500).json({
+      success: false,
+      error: { message: "Failed to generate career GPS" }
+    });
+  }
+}
+
+export async function saveCareerGPS(req: Request, res: Response) {
+  try {
+    const {
+      studentId,
+      targetRoleId,
+      completionPercentage,
+      estimatedWeeks,
+      missingSkills,
+      roadmap
+    } = req.body as SaveGPSRequest;
+
+    if (!studentId || !targetRoleId) {
+      return res.status(400).json({
+        success: false,
+        error: { message: "studentId and targetRoleId are required" }
+      });
+    }
+
+    const student = await prisma.studentProfile.findUnique({ where: { userId: studentId } });
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        error: { message: "Student profile not found" }
+      });
+    }
+
+    const existing = await prisma.studentLearningPath.findFirst({
+      where: { studentId: student.id, roleId: targetRoleId, isActive: true }
+    });
+
+    const data = {
+      completionPct: completionPercentage,
+      missingSkillsJson: missingSkills ?? undefined,
+      roadmapJson: roadmap ?? undefined,
+      lastComputedAt: new Date(),
+      isActive: true
+    };
+
+    const saved = existing
+      ? await prisma.studentLearningPath.update({ where: { id: existing.id }, data })
+      : await prisma.studentLearningPath.create({
+          data: {
+            studentId: student.id,
+            roleId: targetRoleId,
+            ...data
+          }
+        });
+
+    return res.json({
+      success: true,
+      data: {
+        message: "Career GPS saved successfully",
+        saved: Boolean(saved),
+        pathId: saved.id,
+        estimatedWeeks
+      }
+    });
+  } catch (error) {
+    console.error("Save Career GPS error:", error);
+    return res.status(500).json({
+      success: false,
+      error: { message: "Failed to save career GPS" }
+    });
+  }
+}
+
+export async function getCareerGPSHistory(req: Request, res: Response) {
+  try {
+    const { studentId } = req.params;
+    const student = await prisma.studentProfile.findUnique({ where: { userId: studentId } });
+
+    if (!student) {
+      return res.json({ success: true, data: { history: [] } });
+    }
+
+    const paths = await prisma.studentLearningPath.findMany({
+      where: { studentId: student.id },
+      include: { role: true },
+      orderBy: [{ lastComputedAt: "desc" }, { createdAt: "desc" }]
+    });
+
+    const history = paths.map((path) => {
+      const roadmap = Array.isArray(path.roadmapJson) ? path.roadmapJson : [];
+      const estimatedWeeks = roadmap.reduce<number>((sum, item) => {
+        if (typeof item === "object" && item && "estimatedWeeks" in item) {
+          const weeks = Number(item.estimatedWeeks);
+          return Number.isFinite(weeks) ? sum + weeks : sum;
+        }
+
+        return sum;
+      }, 0);
+
+      return {
+        id: path.id,
+        roleId: path.roleId,
+        roleName: path.role.title,
+        completionPercentage: Math.round(path.completionPct),
+        estimatedWeeks,
+        lastUpdated: path.lastComputedAt ?? path.createdAt
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: { history }
+    });
+  } catch (error) {
+    console.error("Get Career GPS history error:", error);
+    return res.status(500).json({
+      success: false,
+      error: { message: "Failed to get career GPS history" }
+    });
+  }
+}
