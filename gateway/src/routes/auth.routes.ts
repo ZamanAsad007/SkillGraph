@@ -1,11 +1,30 @@
 import { Router } from "express";
-import { getCurrentUser, githubCallback, redirectToGithub } from "../controllers/auth.controller.js";
+import {
+  getCurrentUser,
+  getSocketToken,
+  githubCallback,
+  googleCallback,
+  loginWithEmail,
+  logout,
+  redirectToGithub,
+  redirectToGoogle,
+  registerWithEmail,
+  verifyEmail
+} from "../controllers/auth.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
 
 export const authRouter = Router();
 
 authRouter.get("/github", redirectToGithub);
-authRouter.get("/github/callback", githubCallback);
-authRouter.get("/me", requireAuth, getCurrentUser);
+authRouter.get("/github/callback", asyncHandler(githubCallback));
+authRouter.get("/google", redirectToGoogle);
+authRouter.get("/google/callback", asyncHandler(googleCallback));
+authRouter.post("/register", asyncHandler(registerWithEmail));
+authRouter.post("/login", asyncHandler(loginWithEmail));
+authRouter.post("/verify-email", asyncHandler(verifyEmail));
+authRouter.get("/verify-email", asyncHandler(verifyEmail));
+authRouter.get("/me", requireAuth, asyncHandler(getCurrentUser));
+authRouter.get("/socket-token", requireAuth, getSocketToken);
 authRouter.post("/refresh", requireAuth, (_req, res) => res.json({ success: true, data: null }));
-authRouter.post("/logout", requireAuth, (_req, res) => res.json({ success: true, data: null }));
+authRouter.post("/logout", requireAuth, logout);
