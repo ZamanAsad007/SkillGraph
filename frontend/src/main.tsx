@@ -12,6 +12,7 @@ import { MentorMatch } from "./pages/MentorMatch";
 import { Notifications } from "./pages/Notifications";
 import { PublicGalaxy } from "./pages/PublicGalaxy";
 import { Resources } from "./pages/Resources";
+import { Settings } from "./pages/Settings";
 import { WhatIfSimulator } from "./pages/WhatIfSimulator";
 import "./styles.css";
 
@@ -20,6 +21,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Login />} />
         <Route path="/galaxy/:handle" element={<PublicGalaxy />} />
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -32,6 +34,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="/simulator" element={<WhatIfSimulator />} />
           <Route path="/career-fair" element={<CareerFair />} />
           <Route path="/mentors" element={<MentorMatch />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>
