@@ -31,6 +31,16 @@ export async function getStudentSkills(studentId: string) {
   return response.data.data;
 }
 
+export async function getStudentGalaxy(studentId: string) {
+  const response = await api.get(`/graph/galaxy/${studentId}`);
+  return response.data.data as GalaxyData;
+}
+
+export async function getPublicGalaxy(handle: string) {
+  const response = await api.get(`/public/galaxy/${handle}`);
+  return response.data.data as GalaxyData;
+}
+
 export async function triggerIngestion() {
   const response = await api.post("/ingestion/trigger");
   return response.data.data as {

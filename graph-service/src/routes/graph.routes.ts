@@ -26,19 +26,36 @@ const updateSchema = z.object({
 function toGalaxy(records: Array<{ node: { properties: Record<string, unknown> }; rel?: { type: string; properties: Record<string, unknown> }; target?: { properties: Record<string, unknown> } }>) {
   const nodes = new Map<string, Record<string, unknown>>();
   const links: Array<Record<string, unknown>> = [];
+  const normalizeProperties = (properties: Record<string, unknown>) => (
+    Object.fromEntries(
+      Object.entries(properties).map(([key, value]) => [
+        key,
+        value && typeof value === "object" && "toNumber" in value && typeof value.toNumber === "function"
+          ? value.toNumber()
+          : value
+      ])
+    )
+  );
 
   for (const record of records) {
-    const source = record.node.properties;
+    const source = normalizeProperties(record.node.properties);
     const sourceLabels = "labels" in record.node ? (record.node as unknown as { labels?: string[] }).labels : [];
     const sourceId = String(source.id ?? source.name);
     nodes.set(sourceId, { id: sourceId, labels: sourceLabels, ...source });
 
     if (record.target && record.rel) {
-      const target = record.target.properties;
+      const target = normalizeProperties(record.target.properties);
+      const rel = normalizeProperties(record.rel.properties);
       const targetLabels = "labels" in record.target ? (record.target as unknown as { labels?: string[] }).labels : [];
       const targetId = String(target.id ?? target.name);
-      nodes.set(targetId, { id: targetId, labels: targetLabels, ...target });
-      links.push({ source: sourceId, target: targetId, type: record.rel.type, ...record.rel.properties });
+      const targetNode = {
+        id: targetId,
+        labels: targetLabels,
+        ...target,
+        ...(record.rel.type === "KNOWS" ? rel : {})
+      };
+      nodes.set(targetId, { ...nodes.get(targetId), ...targetNode });
+      links.push({ source: sourceId, target: targetId, type: record.rel.type, ...rel });
     }
   }
 

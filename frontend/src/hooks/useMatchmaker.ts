@@ -1,15 +1,54 @@
-import { useState } from "react";
-import type { MatchScope, MatchmakerCandidate, MatchmakerResult } from "../services/matchmaker.service";
+import { useCallback, useState } from "react";
+import {
+  findMatchmakerCandidates,
+  sendMatchInvite,
+  type MatchScope,
+  type MatchmakerCandidate,
+  type MatchmakerResult
+} from "../services/matchmaker.service";
 
 export function useMatchmaker() {
   const [candidates, setCandidates] = useState<MatchmakerCandidate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const findCandidates = async (_params: { requiredSkills: string[]; scope: MatchScope }) => {
-    setCandidates([] as MatchmakerCandidate[]);
-    return { scope: _params.scope, requiredSkills: _params.requiredSkills, candidates: [] as MatchmakerCandidate[] } satisfies MatchmakerResult;
-  };
+  const findCandidates = useCallback(async (params: { requiredSkills: string[]; scope: MatchScope }) => {
+    setLoading(true);
+    setError(null);
 
-  const invite = async (_params: { candidateId: string; projectName: string; requiredSkills: string[]; message?: string }) => undefined;
+    try {
+      const result = await findMatchmakerCandidates(params);
+      setCandidates(result.candidates ?? []);
+      return result;
+    } catch (fetchError) {
+      setCandidates([]);
+      setError(fetchError instanceof Error ? fetchError.message : "Failed to find candidates");
+      return {
+        scope: params.scope,
+        requiredSkills: params.requiredSkills,
+        candidates: []
+      } satisfies MatchmakerResult;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  return { candidates, loading: false, error: null as string | null, findCandidates, invite };
+  const invite = useCallback(async (params: {
+    candidateId: string;
+    projectName: string;
+    requiredSkills: string[];
+    message?: string;
+  }) => {
+    setError(null);
+
+    try {
+      await sendMatchInvite(params);
+    } catch (inviteError) {
+      const message = inviteError instanceof Error ? inviteError.message : "Failed to send invitation";
+      setError(message);
+      throw new Error(message);
+    }
+  }, []);
+
+  return { candidates, loading, error, findCandidates, invite };
 }

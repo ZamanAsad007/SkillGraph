@@ -353,7 +353,7 @@ export function Dashboard() {
           <CardContent className="flex items-center justify-between px-4">
             <div>
               <p className="text-xs font-medium text-[#626f86]">Skills mapped</p>
-              <p className="mt-1 text-2xl font-semibold text-[#17202a]">{nodes.length}</p>
+              <p className="mt-1 text-2xl font-semibold text-[#17202a]">{skillNodes.length}</p>
             </div>
             <div className="grid size-9 place-items-center rounded-lg bg-[#e9f2ff] text-[#0c66e4]">
               <GitBranch className="size-4" />
