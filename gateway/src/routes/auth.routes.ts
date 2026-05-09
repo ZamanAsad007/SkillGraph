@@ -1,5 +1,8 @@
 import { Router } from "express";
 import {
+  createDepartment,
+  createUniversity,
+  getAcademicOptions,
   getCurrentUser,
   getSocketToken,
   githubCallback,
@@ -9,6 +12,7 @@ import {
   redirectToGithub,
   redirectToGoogle,
   registerWithEmail,
+  updateAcademicProfile,
   verifyEmail
 } from "../controllers/auth.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
@@ -25,6 +29,10 @@ authRouter.post("/login", asyncHandler(loginWithEmail));
 authRouter.post("/verify-email", asyncHandler(verifyEmail));
 authRouter.get("/verify-email", asyncHandler(verifyEmail));
 authRouter.get("/me", requireAuth, asyncHandler(getCurrentUser));
+authRouter.get("/academic-options", requireAuth, asyncHandler(getAcademicOptions));
+authRouter.post("/universities", requireAuth, asyncHandler(createUniversity));
+authRouter.post("/departments", requireAuth, asyncHandler(createDepartment));
+authRouter.patch("/academic-profile", requireAuth, asyncHandler(updateAcademicProfile));
 authRouter.get("/socket-token", requireAuth, getSocketToken);
 authRouter.post("/refresh", requireAuth, (_req, res) => res.json({ success: true, data: null }));
 authRouter.post("/logout", requireAuth, logout);

@@ -1,0 +1,512 @@
+//// ------------------------------------------------------
+//// THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+//// ------------------------------------------------------
+
+Table users {
+  id String [pk]
+  githubId String [unique]
+  githubHandle String [unique]
+  googleId String [unique]
+  email String [unique]
+  emailVerifiedAt DateTime
+  passwordHash String
+  emailVerificationTokenHash String
+  emailVerificationExpiresAt DateTime
+  fullName String [not null]
+  avatarUrl String
+  role UserRole [not null, default: 'student']
+  isActive Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  studentProfile student_profiles
+  alumniProfile alumni_profiles
+  oauthConnections oauth_connections [not null]
+  repositories github_repositories [not null]
+  ownedProjects academic_projects [not null]
+  collaborations project_collaborators [not null]
+  endorsementsGiven peer_endorsements [not null]
+  endorsementsGot peer_endorsements [not null]
+  teamRequests team_requests [not null]
+  teamMatches team_matches [not null]
+  sentInvitations project_invitations [not null]
+  receivedInvites project_invitations [not null]
+  notifications system_notifications [not null]
+  auditLogs audit_logs [not null]
+}
+
+Table student_profiles {
+  id String [pk]
+  userId String [unique, not null]
+  studentIdNo String [unique]
+  departmentId String
+  universityId String
+  graduationYear Int
+  bio String
+  linkedinUrl String
+  portfolioUrl String
+  publicHandle String [unique, not null]
+  createdAt DateTime [default: `now()`, not null]
+  user users [not null]
+  department departments
+  university universities
+  portfolios portfolios [not null]
+  certifications certifications [not null]
+  learningPaths student_learning_paths [not null]
+  mentorships alumni_mentorships [not null]
+  resumeExports resume_exports [not null]
+  decayAudits skill_decay_audits [not null]
+  simulatedPaths simulated_paths [not null]
+}
+
+Table universities {
+  id String [pk]
+  name String [not null]
+  shortName String [not null]
+  country String
+  createdAt DateTime [default: `now()`, not null]
+  departments departments [not null]
+  studentProfiles student_profiles [not null]
+  careerFairs career_fairs [not null]
+}
+
+Table departments {
+  id String [pk]
+  universityId String [not null]
+  name String [not null]
+  code String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  university universities [not null]
+  studentProfiles student_profiles [not null]
+}
+
+Table oauth_connections {
+  id String [pk]
+  userId String [not null]
+  provider String [not null, default: 'github']
+  accessTokenEnc String [not null]
+  tokenScope String
+  lastUsedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  user users [not null]
+}
+
+Table academic_projects {
+  id String [pk]
+  title String [not null]
+  description String
+  ownerId String [not null]
+  repoId String
+  startDate DateTime
+  endDate DateTime
+  isCapstone Boolean [not null, default: false]
+  createdAt DateTime [default: `now()`, not null]
+  owner users [not null]
+  repository github_repositories
+  collaborators project_collaborators [not null]
+  teamRequests team_requests [not null]
+  invitations project_invitations [not null]
+}
+
+Table project_collaborators {
+  id String [pk]
+  projectId String [not null]
+  userId String [not null]
+  role String
+  joinedAt DateTime [default: `now()`, not null]
+  project academic_projects [not null]
+  user users [not null]
+
+  indexes {
+    (projectId, userId) [unique]
+  }
+}
+
+Table github_repositories {
+  id String [pk]
+  userId String [not null]
+  githubRepoId BigInt [unique, not null]
+  repoName String [not null]
+  fullName String [not null]
+  description String
+  language String
+  starsCount Int [not null, default: 0]
+  isFork Boolean [not null, default: false]
+  rawReadmeText String
+  lastIngestedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  user users [not null]
+  commits github_commits [not null]
+  projects academic_projects [not null]
+}
+
+Table github_commits {
+  id String [pk]
+  repoId String [not null]
+  sha String [unique, not null]
+  message String
+  committedAt DateTime [not null]
+  repository github_repositories [not null]
+}
+
+Table portfolios {
+  id String [pk]
+  studentId String [not null]
+  isPublic Boolean [not null, default: true]
+  viewCount Int [not null, default: 0]
+  lastViewed DateTime
+  createdAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+}
+
+Table skill_categories {
+  id String [pk]
+  name String [unique, not null]
+  colorHex String
+  iconName String
+  skills skills [not null]
+}
+
+Table skills {
+  id String [pk]
+  name String [unique, not null]
+  categoryId String
+  aliases String[] [not null]
+  createdAt DateTime [default: `now()`, not null]
+  category skill_categories
+  requirements role_requirements [not null]
+  endorsements peer_endorsements [not null]
+  mentorships alumni_mentorships [not null]
+}
+
+Table industry_roles {
+  id String [pk]
+  title String [unique, not null]
+  description String
+  source String [not null, default: 'LinkedIn + roadmap.sh curation']
+  createdAt DateTime [default: `now()`, not null]
+  requirements role_requirements [not null]
+  learningPaths student_learning_paths [not null]
+  resumeExports resume_exports [not null]
+  simulatedPaths simulated_paths [not null]
+}
+
+Table role_requirements {
+  id String [pk]
+  roleId String [not null]
+  skillId String [not null]
+  criticality Float [not null, default: 0.5]
+  role industry_roles [not null]
+  skill skills [not null]
+
+  indexes {
+    (roleId, skillId) [unique]
+  }
+}
+
+Table learning_resources {
+  id String [pk]
+  title String [not null]
+  url String [unique, not null]
+  type String [not null]
+  provider String
+  durationHours Float
+  isUniversityApproved Boolean [not null, default: false]
+  courseCode String
+  rating Float
+  createdAt DateTime [default: `now()`, not null]
+}
+
+Table certifications {
+  id String [pk]
+  studentId String [not null]
+  name String [not null]
+  issuer String
+  issuedDate DateTime
+  expiryDate DateTime
+  credentialUrl String
+  createdAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+}
+
+Table student_learning_paths {
+  id String [pk]
+  studentId String [not null]
+  roleId String [not null]
+  completionPct Float [not null, default: 0]
+  missingSkillsJson Json
+  roadmapJson Json
+  isActive Boolean [not null, default: true]
+  lastComputedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+  role industry_roles [not null]
+}
+
+Table peer_endorsements {
+  id String [pk]
+  endorserId String [not null]
+  endorsedId String [not null]
+  skillId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  endorser users [not null]
+  endorsed users [not null]
+  skill skills [not null]
+
+  indexes {
+    (endorserId, endorsedId, skillId) [unique]
+  }
+}
+
+Table team_requests {
+  id String [pk]
+  projectId String [not null]
+  requesterId String [not null]
+  requiredSkills Json [not null]
+  createdAt DateTime [default: `now()`, not null]
+  project academic_projects [not null]
+  requester users [not null]
+  matches team_matches [not null]
+}
+
+Table team_matches {
+  id String [pk]
+  requestId String [not null]
+  matchedUser String [not null]
+  matchScore Float
+  createdAt DateTime [default: `now()`, not null]
+  request team_requests [not null]
+  user users [not null]
+}
+
+Table project_invitations {
+  id String [pk]
+  projectId String [not null]
+  fromUserId String [not null]
+  toUserId String [not null]
+  status InvitationStatus [not null, default: 'pending']
+  respondedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  project academic_projects [not null]
+  fromUser users [not null]
+  toUser users [not null]
+
+  indexes {
+    (projectId, toUserId) [unique]
+  }
+}
+
+Table system_notifications {
+  id String [pk]
+  userId String [not null]
+  type String [not null]
+  payload Json [not null]
+  isRead Boolean [not null, default: false]
+  createdAt DateTime [default: `now()`, not null]
+  user users [not null]
+}
+
+Table audit_logs {
+  id String [pk]
+  userId String
+  action String [not null]
+  entity String
+  entityId String
+  metadata Json
+  ipAddress String
+  createdAt DateTime [default: `now()`, not null]
+  user users
+}
+
+Table career_fairs {
+  id String [pk]
+  universityId String [not null]
+  name String [not null]
+  eventDate DateTime [not null]
+  location String
+  createdAt DateTime [default: `now()`, not null]
+  university universities [not null]
+  booths career_fair_booths [not null]
+}
+
+Table career_fair_booths {
+  id String [pk]
+  fairId String [not null]
+  companyName String [not null]
+  requiredSkills Json [not null]
+  hiringRoles String[] [not null]
+  boothNumber String
+  createdAt DateTime [default: `now()`, not null]
+  fair career_fairs [not null]
+}
+
+Table alumni_profiles {
+  id String [pk]
+  userId String [unique, not null]
+  graduationYear Int
+  currentCompany String
+  currentRole String
+  yearsExperience Int
+  mentoringSkills String[] [not null]
+  willingToMentor Boolean [not null, default: false]
+  linkedinUrl String
+  createdAt DateTime [default: `now()`, not null]
+  user users [not null]
+  mentorships alumni_mentorships [not null]
+}
+
+Table alumni_mentorships {
+  id String [pk]
+  studentId String [not null]
+  alumniId String [not null]
+  skillId String [not null]
+  status MentorshipStatus [not null, default: 'requested']
+  startedAt DateTime
+  endedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+  alumni alumni_profiles [not null]
+  skill skills [not null]
+}
+
+Table resume_exports {
+  id String [pk]
+  studentId String [not null]
+  roleId String
+  filePath String
+  atsScore Float
+  createdAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+  role industry_roles
+}
+
+Table skill_decay_audits {
+  id String [pk]
+  studentId String [not null]
+  skillName String [not null]
+  currentWeight Float [not null]
+  lastActiveDate DateTime [not null]
+  lastDecayedAt DateTime
+  isDormant Boolean [not null, default: false]
+  decayCycles Int [not null, default: 0]
+  createdAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+
+  indexes {
+    (studentId, skillName) [unique]
+  }
+}
+
+Table simulated_paths {
+  id String [pk]
+  studentId String [not null]
+  scenarioName String
+  targetRoleId String
+  hypotheticalSkills Json [not null]
+  simulatedResult Json [not null]
+  completionDelta Float
+  weeksSaved Int
+  createdAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+  targetRole industry_roles
+}
+
+Enum UserRole {
+  student
+  professor
+  admin
+  alumni
+}
+
+Enum InvitationStatus {
+  pending
+  accepted
+  declined
+}
+
+Enum MentorshipStatus {
+  requested
+  active
+  completed
+}
+
+Ref: student_profiles.userId - users.id [delete: Cascade]
+
+Ref: student_profiles.departmentId > departments.id
+
+Ref: student_profiles.universityId > universities.id
+
+Ref: departments.universityId > universities.id
+
+Ref: oauth_connections.userId > users.id [delete: Cascade]
+
+Ref: academic_projects.ownerId > users.id
+
+Ref: academic_projects.repoId > github_repositories.id
+
+Ref: project_collaborators.projectId > academic_projects.id [delete: Cascade]
+
+Ref: project_collaborators.userId > users.id
+
+Ref: github_repositories.userId > users.id
+
+Ref: github_commits.repoId > github_repositories.id [delete: Cascade]
+
+Ref: portfolios.studentId > student_profiles.id
+
+Ref: skills.categoryId > skill_categories.id
+
+Ref: role_requirements.roleId > industry_roles.id [delete: Cascade]
+
+Ref: role_requirements.skillId > skills.id
+
+Ref: certifications.studentId > student_profiles.id
+
+Ref: student_learning_paths.studentId > student_profiles.id
+
+Ref: student_learning_paths.roleId > industry_roles.id
+
+Ref: peer_endorsements.endorserId > users.id
+
+Ref: peer_endorsements.endorsedId > users.id
+
+Ref: peer_endorsements.skillId > skills.id
+
+Ref: team_requests.projectId > academic_projects.id
+
+Ref: team_requests.requesterId > users.id
+
+Ref: team_matches.requestId > team_requests.id
+
+Ref: team_matches.matchedUser > users.id
+
+Ref: project_invitations.projectId > academic_projects.id
+
+Ref: project_invitations.fromUserId > users.id
+
+Ref: project_invitations.toUserId > users.id
+
+Ref: system_notifications.userId > users.id
+
+Ref: audit_logs.userId > users.id
+
+Ref: career_fairs.universityId > universities.id
+
+Ref: career_fair_booths.fairId > career_fairs.id
+
+Ref: alumni_profiles.userId - users.id
+
+Ref: alumni_mentorships.studentId > student_profiles.id
+
+Ref: alumni_mentorships.alumniId > alumni_profiles.id
+
+Ref: alumni_mentorships.skillId > skills.id
+
+Ref: resume_exports.studentId > student_profiles.id
+
+Ref: resume_exports.roleId > industry_roles.id
+
+Ref: skill_decay_audits.studentId > student_profiles.id
+
+Ref: simulated_paths.studentId > student_profiles.id
+
+Ref: simulated_paths.targetRoleId > industry_roles.id
