@@ -6,6 +6,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      GRAPH_SERVICE_URL: http://graph-service:3001
+      NLP_SERVICE_URL: http://nlp-service:8001
       POSTGRES_HOST: postgres
     ports:
       - "3000:3000"
