@@ -11,6 +11,7 @@ type ProjectSkillPickerProps = {
   selectedSkills: string[];
   suggestions: Array<{ name: string; category: string }>;
   scope: MatchScope;
+  disabledScopes?: Partial<Record<MatchScope, string>>;
   onScopeChange: (scope: MatchScope) => void;
   onAddSkill: (skill: string) => void;
   onRemoveSkill: (skill: string) => void;
@@ -32,6 +33,7 @@ export function ProjectSkillPicker({
   selectedSkills,
   suggestions,
   scope,
+  disabledScopes,
   onScopeChange,
   onAddSkill,
   onRemoveSkill,
@@ -119,25 +121,32 @@ export function ProjectSkillPicker({
 
         <div className="space-y-2">
           <p className="text-sm font-medium text-[#17202a]">Matching scope</p>
-          {scopeOptions.map((option) => (
-            <label
-              key={option.value}
-              className="flex cursor-pointer gap-2 rounded-lg border border-[#dfe3ea] bg-[#f7f8fa] p-3 hover:border-[#0c66e4]"
-            >
-              <input
-                type="radio"
-                name="match-scope"
-                value={option.value}
-                checked={scope === option.value}
-                onChange={() => onScopeChange(option.value)}
-                className="mt-1"
-              />
-              <span>
-                <span className="block text-sm font-semibold text-[#17202a]">{option.label}</span>
-                <span className="text-xs text-[#626f86]">{option.detail}</span>
-              </span>
-            </label>
-          ))}
+          {scopeOptions.map((option) => {
+            const disabledReason = disabledScopes?.[option.value];
+            return (
+              <label
+                key={option.value}
+                title={disabledReason}
+                className={`flex gap-2 rounded-lg border border-[#dfe3ea] bg-[#f7f8fa] p-3 ${
+                  disabledReason ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:border-[#0c66e4]"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="match-scope"
+                  value={option.value}
+                  checked={scope === option.value}
+                  disabled={Boolean(disabledReason)}
+                  onChange={() => onScopeChange(option.value)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-[#17202a]">{option.label}</span>
+                  <span className="text-xs text-[#626f86]">{disabledReason ?? option.detail}</span>
+                </span>
+              </label>
+            );
+          })}
           <Button
             type="button"
             onClick={onFind}

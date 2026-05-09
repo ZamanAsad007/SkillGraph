@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 import type { Request, Response } from "express";
+import { z } from "zod";
 import { prisma } from "@skillgraph/database";
 import { env } from "../config/env.js";
 import { ok, fail } from "../utils/apiResponse.js";
@@ -46,6 +47,18 @@ function nanoid6(): string {
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "user";
+}
+
+function universityShortName(name: string) {
+  const words = name.match(/[a-z0-9]+/gi) ?? [];
+  const initials = words.map((word) => word[0]).join("").toUpperCase();
+  return (initials || name.replace(/[^a-z0-9]/gi, "").toUpperCase() || "UNI").slice(0, 20);
+}
+
+function departmentCode(name: string) {
+  const words = name.match(/[a-z0-9]+/gi) ?? [];
+  const initials = words.map((word) => word[0]).join("").toUpperCase();
+  return (initials || name.replace(/[^a-z0-9]/gi, "").toUpperCase() || "DEPT").slice(0, 10);
 }
 
 async function generateUniquePublicHandle(seed: string): Promise<string> {
@@ -494,7 +507,15 @@ export async function getCurrentUser(req: Request, res: Response) {
   }
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
-    include: { studentProfile: true, oauthConnections: true }
+    include: {
+      studentProfile: {
+        include: {
+          university: true,
+          department: true
+        }
+      },
+      oauthConnections: true
+    }
   });
   if (!user) {
     fail(res, "USER_NOT_FOUND", "Authenticated user no longer exists", 404);
@@ -510,7 +531,184 @@ export async function getCurrentUser(req: Request, res: Response) {
     githubConnected: Boolean(user.githubHandle || user.oauthConnections.some((connection) => connection.provider === "github")),
     fullName: user.fullName,
     avatarUrl: user.avatarUrl,
-    publicHandle: user.studentProfile?.publicHandle
+    publicHandle: user.studentProfile?.publicHandle,
+    academicProfile: user.studentProfile
+      ? {
+          universityId: user.studentProfile.universityId,
+          universityName: user.studentProfile.university?.name ?? null,
+          departmentId: user.studentProfile.departmentId,
+          departmentName: user.studentProfile.department?.name ?? null,
+          graduationYear: user.studentProfile.graduationYear
+        }
+      : null
+  });
+}
+
+export async function getAcademicOptions(_req: Request, res: Response) {
+  const universities = await prisma.university.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      departments: {
+        orderBy: { name: "asc" }
+      }
+    }
+  });
+
+  ok(res, {
+    universities: universities.map((university) => ({
+      id: university.id,
+      name: university.name,
+      shortName: university.shortName,
+      country: university.country,
+      departments: university.departments.map((department) => ({
+        id: department.id,
+        name: department.name,
+        code: department.code
+      }))
+    }))
+  });
+}
+
+export async function createUniversity(req: Request, res: Response) {
+  const payload = z.object({
+    name: z.string().trim().min(2).max(200),
+    country: z.string().trim().min(2).max(100).nullable().optional()
+  }).parse(req.body);
+
+  const existingUniversity = await prisma.university.findFirst({
+    where: {
+      name: {
+        equals: payload.name,
+        mode: "insensitive"
+      }
+    },
+    include: {
+      departments: {
+        orderBy: { name: "asc" }
+      }
+    }
+  });
+
+  const university = existingUniversity ?? await prisma.university.create({
+    data: {
+      name: payload.name,
+      shortName: universityShortName(payload.name),
+      country: payload.country ?? null
+    },
+    include: {
+      departments: true
+    }
+  });
+
+  ok(res, {
+    id: university.id,
+    name: university.name,
+    shortName: university.shortName,
+    country: university.country,
+    departments: university.departments.map((department) => ({
+      id: department.id,
+      name: department.name,
+      code: department.code
+    })),
+    created: !existingUniversity
+  }, existingUniversity ? 200 : 201);
+}
+
+export async function createDepartment(req: Request, res: Response) {
+  const payload = z.object({
+    universityId: z.string().uuid(),
+    name: z.string().trim().min(2).max(200),
+    code: z.string().trim().min(1).max(10).nullable().optional()
+  }).parse(req.body);
+
+  const university = await prisma.university.findUnique({
+    where: { id: payload.universityId }
+  });
+  if (!university) {
+    fail(res, "UNIVERSITY_NOT_FOUND", "Selected university was not found", 404);
+    return;
+  }
+
+  const existingDepartment = await prisma.department.findFirst({
+    where: {
+      universityId: payload.universityId,
+      name: {
+        equals: payload.name,
+        mode: "insensitive"
+      }
+    }
+  });
+
+  const department = existingDepartment ?? await prisma.department.create({
+    data: {
+      universityId: payload.universityId,
+      name: payload.name,
+      code: (payload.code || departmentCode(payload.name)).toUpperCase()
+    }
+  });
+
+  ok(res, {
+    id: department.id,
+    name: department.name,
+    code: department.code,
+    created: !existingDepartment
+  }, existingDepartment ? 200 : 201);
+}
+
+export async function updateAcademicProfile(req: Request, res: Response) {
+  if (!req.user) {
+    fail(res, "UNAUTHORIZED", "Missing authenticated user", 401);
+    return;
+  }
+
+  const payload = z.object({
+    universityId: z.string().uuid(),
+    departmentId: z.string().uuid().nullable().optional(),
+    graduationYear: z.number().int().min(2000).max(2100).nullable().optional()
+  }).parse(req.body);
+
+  const university = await prisma.university.findUnique({
+    where: { id: payload.universityId }
+  });
+  if (!university) {
+    fail(res, "UNIVERSITY_NOT_FOUND", "Selected university was not found", 404);
+    return;
+  }
+
+  let department = null;
+  if (payload.departmentId) {
+    department = await prisma.department.findFirst({
+      where: {
+        id: payload.departmentId,
+        universityId: payload.universityId
+      }
+    });
+    if (!department) {
+      fail(res, "DEPARTMENT_NOT_FOUND", "Selected department does not belong to this university", 400);
+      return;
+    }
+  }
+
+  const profile = await ensureStudentProfile(req.user.id, req.user.githubHandle ?? req.user.id);
+  const updatedProfile = await prisma.studentProfile.update({
+    where: { id: profile.id },
+    data: {
+      universityId: payload.universityId,
+      departmentId: payload.departmentId ?? null,
+      graduationYear: payload.graduationYear ?? null
+    },
+    include: {
+      university: true,
+      department: true
+    }
+  });
+
+  ok(res, {
+    universityId: updatedProfile.universityId,
+    universityName: updatedProfile.university?.name ?? null,
+    departmentId: updatedProfile.departmentId,
+    departmentName: updatedProfile.department?.name ?? null,
+    graduationYear: updatedProfile.graduationYear
   });
 }
 

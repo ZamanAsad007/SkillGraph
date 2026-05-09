@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Network, RefreshCw, Users } from "lucide-react";
+import { Link } from "react-router-dom";
 import { CandidateCard } from "../components/matchmaker/CandidateCard";
 import { ProjectSkillPicker } from "../components/matchmaker/ProjectSkillPicker";
 import { TeamCompositionPanel } from "../components/matchmaker/TeamCompositionPanel";
 import { useMatchmaker } from "../hooks/useMatchmaker";
+import { getCurrentUser, type AcademicProfile } from "../services/auth.service";
 import { getAllSkills, type MatchScope, type MatchmakerCandidate } from "../services/matchmaker.service";
 import { Button } from "@/components/ui/button";
 
@@ -15,6 +17,7 @@ export function Matchmaker() {
   const [skillSuggestions, setSkillSuggestions] = useState<Array<{ name: string; category: string }>>([]);
   const [inviteStatus, setInviteStatus] = useState<Record<string, "sending" | "sent">>({});
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [academicProfile, setAcademicProfile] = useState<AcademicProfile | null>(null);
   const { candidates, loading, error, findCandidates, invite } = useMatchmaker();
 
   useEffect(() => {
@@ -22,6 +25,21 @@ export function Matchmaker() {
       .then(setSkillSuggestions)
       .catch(() => setSkillSuggestions([]));
   }, []);
+
+  useEffect(() => {
+    void getCurrentUser()
+      .then((currentUser) => setAcademicProfile(currentUser.academicProfile ?? null))
+      .catch(() => setAcademicProfile(null));
+  }, []);
+
+  useEffect(() => {
+    if (scope === "same_university" && !academicProfile?.universityId) {
+      setScope("all_universities");
+    }
+    if (scope === "same_department" && !academicProfile?.departmentId) {
+      setScope(academicProfile?.universityId ? "same_university" : "all_universities");
+    }
+  }, [academicProfile, scope]);
 
   const addSkill = (skill: string) => {
     const normalized = skill.trim();
@@ -40,7 +58,21 @@ export function Matchmaker() {
   };
 
   const handleFind = () => {
+    if (scope === "same_university" && !academicProfile?.universityId) {
+      setStatusMessage("Add your university in Settings before using same-university matching.");
+      return;
+    }
+    if (scope === "same_department" && !academicProfile?.departmentId) {
+      setStatusMessage("Add your department in Settings before using same-department matching.");
+      return;
+    }
+    setStatusMessage(null);
     void findCandidates({ requiredSkills: selectedSkills, scope });
+  };
+
+  const disabledScopes: Partial<Record<MatchScope, string>> = {
+    ...(!academicProfile?.departmentId ? { same_department: "Add your department in Settings first" } : {}),
+    ...(!academicProfile?.universityId ? { same_university: "Add your university in Settings first" } : {})
   };
 
   const handleInvite = async (candidate: MatchmakerCandidate) => {
@@ -101,6 +133,15 @@ export function Matchmaker() {
         </div>
       )}
 
+      {!academicProfile?.universityId && (
+        <div className="rounded-lg border border-[#dfe3ea] bg-white px-4 py-3 text-sm text-[#44546f] shadow-sm">
+          Same-university matching needs your academic profile.{" "}
+          <Link to="/settings" className="font-medium text-[#0c66e4]">
+            Add university
+          </Link>
+        </div>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="grid gap-4">
           <ProjectSkillPicker
@@ -111,6 +152,7 @@ export function Matchmaker() {
             selectedSkills={selectedSkills}
             suggestions={skillSuggestions}
             scope={scope}
+            disabledScopes={disabledScopes}
             onScopeChange={setScope}
             onAddSkill={addSkill}
             onRemoveSkill={removeSkill}
