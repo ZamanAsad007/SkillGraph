@@ -1,6 +1,6 @@
 import { isAxiosError } from "axios";
 import { ArrowLeft, Mail, ShieldCheck } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { GitHubConnectButton } from "../components/auth/GitHubConnectButton";
 import { GoogleConnectButton } from "../components/auth/GoogleConnectButton";
@@ -25,8 +25,17 @@ export function Login() {
   const [password, setPassword] = useState("");
   const [verificationToken, setVerificationToken] = useState("");
   const [devVerificationToken, setDevVerificationToken] = useState<string>();
+  const [verificationEmailSent, setVerificationEmailSent] = useState<boolean>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const token = new URLSearchParams(location.search).get("token");
+    if (!token) return;
+
+    setVerificationToken(token);
+    setMode("verify");
+  }, [location.search]);
 
   const title = useMemo(() => {
     if (mode === "signup") return "Create your SkillGraph account";
@@ -43,7 +52,8 @@ export function Login() {
       if (mode === "signup") {
         const result = await registerWithEmail({ fullName, email, password });
         setDevVerificationToken(result.verificationToken);
-        setVerificationToken(result.verificationToken ?? "");
+        setVerificationEmailSent(result.emailSent);
+        setVerificationToken("");
         setMode("verify");
       } else if (mode === "verify") {
         await verifyEmail(verificationToken);
@@ -97,7 +107,9 @@ export function Login() {
           <h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
           <p className="mt-2 text-sm text-[#626f86]">
             {mode === "verify"
-              ? "Paste the confirmation token sent to your email."
+              ? verificationEmailSent === false
+                ? "Email delivery is not configured for this environment."
+                : "Paste the confirmation token sent to your email."
               : "Choose an OAuth provider or use email and password."}
           </p>
 
@@ -142,9 +154,10 @@ export function Login() {
               </label>
             )}
 
-            {devVerificationToken && (
-              <div className="rounded-lg border border-[#cce0ff] bg-[#e9f2ff] p-3 text-xs text-[#0c66e4]">
-                Development verification token: <span className="font-mono">{devVerificationToken}</span>
+            {mode === "verify" && devVerificationToken && (
+              <div className="rounded-lg border border-[#cce0ff] bg-[#e9f2ff] p-3 text-xs leading-5 text-[#0c66e4]">
+                SMTP is not configured locally. Use this development token to verify the account:
+                <span className="mt-1 block break-all font-mono">{devVerificationToken}</span>
               </div>
             )}
 
@@ -161,11 +174,20 @@ export function Login() {
 
           <div className="mt-5 text-center text-sm text-[#626f86]">
             {mode === "signup" ? (
-              <button className="font-medium text-[#0c66e4]" onClick={() => setMode("login")}>
+              <button className="font-medium text-[#0c66e4]" onClick={() => {
+                setDevVerificationToken(undefined);
+                setVerificationEmailSent(undefined);
+                setMode("login");
+              }}>
                 Already have an account? Log in
               </button>
             ) : (
-              <button className="font-medium text-[#0c66e4]" onClick={() => setMode("signup")}>
+              <button className="font-medium text-[#0c66e4]" onClick={() => {
+                setDevVerificationToken(undefined);
+                setVerificationEmailSent(undefined);
+                setVerificationToken("");
+                setMode("signup");
+              }}>
                 New here? Create an account
               </button>
             )}

@@ -61,7 +61,13 @@ export async function updateAcademicProfile(input: {
   return response.data.data;
 }
 
-export async function registerWithEmail(input: { fullName: string; email: string; password: string }) {
+export async function registerWithEmail(input: { fullName: string; email: string; password: string }): Promise<{
+  id: string;
+  email: string;
+  emailVerificationRequired: boolean;
+  emailSent: boolean;
+  verificationToken?: string;
+}> {
   const response = await api.post("/auth/register", input);
   return response.data.data;
 }

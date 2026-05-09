@@ -3,6 +3,11 @@ import { z } from "zod";
 
 dotenv.config();
 
+const booleanEnv = z.preprocess((value) => {
+  if (typeof value === "string") return ["1", "true", "yes"].includes(value.toLowerCase());
+  return value;
+}, z.boolean());
+
 const envSchema = z.object({
   GATEWAY_PORT: z.coerce.number().default(3000),
   NODE_ENV: z.string().default("development"),
@@ -18,6 +23,12 @@ const envSchema = z.object({
   GRAPH_SERVICE_URL: z.string().url().default("http://graph-service:3001"),
   NLP_SERVICE_URL: z.string().url().default("http://nlp-service:8001"),
   TOKEN_ENCRYPTION_KEY: z.string().default("skillgraph-development-token-key"),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().optional(),
+  SMTP_SECURE: booleanEnv.default(false),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().optional(),
   JWT_PUBLIC_KEY: z.string().optional(),
   JWT_PRIVATE_KEY: z.string().optional(),
   JWT_ISSUER: z.string().default("skillgraph"),

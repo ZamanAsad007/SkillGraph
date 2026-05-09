@@ -6,6 +6,7 @@ import { prisma } from "@skillgraph/database";
 import { env } from "../config/env.js";
 import { ok, fail } from "../utils/apiResponse.js";
 import { encryptToken } from "../utils/crypto.js";
+import { isEmailConfigured, sendVerificationEmail } from "../utils/email.js";
 import { signAccessToken, signRefreshToken, verifyToken } from "../utils/jwt.js";
 import { getRedis } from "../utils/redis.js";
 
@@ -163,9 +164,10 @@ export function redirectToGithub(req: Request, res: Response) {
     return;
   }
 
+  const callbackUrl = env.GITHUB_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/github/callback`;
   const params = new URLSearchParams({
     client_id: env.GITHUB_CLIENT_ID,
-    redirect_uri: env.GITHUB_CALLBACK_URL ?? "",
+    redirect_uri: callbackUrl,
     scope: "read:user user:email public_repo",
     allow_signup: "true"
   });
@@ -193,7 +195,7 @@ export async function githubCallback(req: Request, res: Response) {
       client_id: env.GITHUB_CLIENT_ID,
       client_secret: env.GITHUB_CLIENT_SECRET,
       code,
-      redirect_uri: env.GITHUB_CALLBACK_URL
+      redirect_uri: env.GITHUB_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/github/callback`
     })
   });
   const tokenPayload = (await tokenResponse.json()) as GithubTokenResponse;
@@ -218,9 +220,14 @@ export async function githubCallback(req: Request, res: Response) {
   }
 
   const authenticatedUserId = getAuthenticatedUserId(req);
+  const linkRequested = req.query.state === "link";
   const githubEmail = githubUser.email?.trim().toLowerCase();
   const existingGithubUser = await prisma.user.findUnique({
     where: { githubId: String(githubUser.id) },
+    include: { studentProfile: true }
+  });
+  const existingGithubHandleUser = await prisma.user.findUnique({
+    where: { githubHandle: githubUser.login },
     include: { studentProfile: true }
   });
   const existingEmailUser = githubEmail
@@ -229,27 +236,53 @@ export async function githubCallback(req: Request, res: Response) {
         include: { studentProfile: true }
       })
     : null;
+  const authenticatedUser = authenticatedUserId
+    ? await prisma.user.findUnique({ where: { id: authenticatedUserId }, include: { studentProfile: true } })
+    : null;
 
-  if (authenticatedUserId && existingGithubUser && existingGithubUser.id !== authenticatedUserId) {
-    fail(res, "GITHUB_ALREADY_LINKED", "This GitHub account is already linked to another SkillGraph user", 409);
-    return;
-  }
-  if (authenticatedUserId && existingEmailUser && existingEmailUser.id !== authenticatedUserId) {
-    fail(res, "EMAIL_ALREADY_LINKED", "This GitHub email is already used by another SkillGraph user", 409);
-    return;
+  const conflictingGithubUser = existingGithubUser?.id !== authenticatedUserId
+    ? existingGithubUser
+    : existingGithubHandleUser?.id !== authenticatedUserId
+    ? existingGithubHandleUser
+    : null;
+
+  if (authenticatedUserId && conflictingGithubUser) {
+    if (!linkRequested) {
+      fail(res, "GITHUB_ALREADY_LINKED", "This GitHub account is already linked to another SkillGraph user", 409);
+      return;
+    }
+
+    await prisma.$transaction([
+      prisma.oauthConnection.deleteMany({
+        where: { userId: conflictingGithubUser.id, provider: "github" }
+      }),
+      prisma.user.update({
+        where: { id: conflictingGithubUser.id },
+        data: {
+          githubId: null,
+          githubHandle: null
+        }
+      })
+    ]);
   }
 
   let user;
   if (authenticatedUserId) {
+    const canUseGithubEmail = Boolean(
+      githubEmail &&
+      (!existingEmailUser || existingEmailUser.id === authenticatedUserId) &&
+      !authenticatedUser?.email
+    );
+
     user = await prisma.user.update({
       where: { id: authenticatedUserId },
       data: {
         githubId: String(githubUser.id),
         githubHandle: githubUser.login,
-        email: githubEmail,
-        emailVerifiedAt: githubEmail ? new Date() : undefined,
-        fullName: githubUser.name ?? githubUser.login,
-        avatarUrl: githubUser.avatar_url
+        email: canUseGithubEmail ? githubEmail : undefined,
+        emailVerifiedAt: canUseGithubEmail ? new Date() : undefined,
+        fullName: authenticatedUser?.fullName ?? githubUser.name ?? githubUser.login,
+        avatarUrl: authenticatedUser?.avatarUrl ?? githubUser.avatar_url
       },
       include: { studentProfile: true }
     });
@@ -318,9 +351,10 @@ export function redirectToGoogle(_req: Request, res: Response) {
     return;
   }
 
+  const callbackUrl = env.GOOGLE_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/google/callback`;
   const params = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
-    redirect_uri: env.GOOGLE_CALLBACK_URL ?? "",
+    redirect_uri: callbackUrl,
     response_type: "code",
     scope: "openid email profile",
     access_type: "offline",
@@ -342,6 +376,7 @@ export async function googleCallback(req: Request, res: Response) {
     return;
   }
 
+  const callbackUrl = env.GOOGLE_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/google/callback`;
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -350,7 +385,7 @@ export async function googleCallback(req: Request, res: Response) {
       client_secret: env.GOOGLE_CLIENT_SECRET,
       code,
       grant_type: "authorization_code",
-      redirect_uri: env.GOOGLE_CALLBACK_URL ?? ""
+      redirect_uri: callbackUrl
     })
   });
   const tokenPayload = (await tokenResponse.json()) as GoogleTokenResponse;
@@ -437,11 +472,27 @@ export async function registerWithEmail(req: Request, res: Response) {
     include: { studentProfile: true }
   });
 
+  let emailSent = false;
+  if (isEmailConfigured()) {
+    try {
+      await sendVerificationEmail(normalizedEmail, verificationToken);
+      emailSent = true;
+    } catch (error) {
+      console.error("Email verification send failed:", error);
+
+      if (env.NODE_ENV === "production") {
+        fail(res, "EMAIL_SEND_FAILED", "Account created, but the verification email could not be sent. Please contact support.", 503);
+        return;
+      }
+    }
+  }
+
   ok(res, {
     id: user.id,
     email: user.email,
     emailVerificationRequired: true,
-    verificationToken: env.NODE_ENV === "production" ? undefined : verificationToken
+    emailSent,
+    verificationToken: env.NODE_ENV === "production" || emailSent ? undefined : verificationToken
   }, 201);
 }
 
