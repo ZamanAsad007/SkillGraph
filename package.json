@@ -23,6 +23,7 @@
     "db:migrate": "npm --workspace @skillgraph/database run prisma:migrate",
     "db:migrate:docker": "docker compose run --rm gateway npm --workspace @skillgraph/database run prisma:migrate",
     "db:deploy": "npm --workspace @skillgraph/database run prisma:deploy",
+    "db:studio": "npm --workspace @skillgraph/database run prisma:studio",
     "db:seed": "npm --workspace @skillgraph/database run db:seed",
     "db:seed:docker": "docker compose run --rm gateway npm --workspace @skillgraph/database run db:seed",
     "lint": "npm run lint --workspaces --if-present",

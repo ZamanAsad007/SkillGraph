@@ -18,6 +18,7 @@
     "prisma:migrate": "node scripts/with-root-env.mjs prisma migrate dev --schema prisma/schema.prisma",
     "prisma:deploy": "node scripts/with-root-env.mjs prisma migrate deploy --schema prisma/schema.prisma",
     "prisma:studio": "node scripts/with-root-env.mjs prisma studio --schema prisma/schema.prisma",
+    "db:studio": "npm run prisma:studio",
     "db:seed": "node scripts/with-root-env.mjs prisma db seed --schema prisma/schema.prisma"
   },
   "dependencies": {

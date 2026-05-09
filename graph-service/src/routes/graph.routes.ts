@@ -23,6 +23,24 @@ const updateSchema = z.object({
   })).default([])
 });
 
+function toNumber(value: unknown, fallback = 0) {
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+  if (value && typeof value === "object" && "toNumber" in value && typeof value.toNumber === "function") {
+    return value.toNumber();
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeNeo4jValue(value: unknown) {
+  if (typeof value === "bigint") return Number(value);
+  if (value && typeof value === "object" && "toNumber" in value && typeof value.toNumber === "function") {
+    return value.toNumber();
+  }
+  return value;
+}
+
 function toGalaxy(records: Array<{ node: { properties: Record<string, unknown> }; rel?: { type: string; properties: Record<string, unknown> }; target?: { properties: Record<string, unknown> } }>) {
   const nodes = new Map<string, Record<string, unknown>>();
   const links: Array<Record<string, unknown>> = [];
@@ -30,9 +48,7 @@ function toGalaxy(records: Array<{ node: { properties: Record<string, unknown> }
     Object.fromEntries(
       Object.entries(properties).map(([key, value]) => [
         key,
-        value && typeof value === "object" && "toNumber" in value && typeof value.toNumber === "function"
-          ? value.toNumber()
-          : value
+        normalizeNeo4jValue(value)
       ])
     )
   );
@@ -377,11 +393,22 @@ graphRouter.post("/matchmaker/candidates", async (req, res, next) => {
         if (payload.scope === "same_department" && !sameDepartment) return null;
         if (payload.scope === "same_university" && !sameUniversity) return null;
 
-        const skillCoverage = signal.matchCount / normalizedRequiredSkills.length;
-        const confidenceScore = Math.min(1, signal.avgConfidence);
-        const endorsementScore = Math.min(1, signal.endorsementCount / Math.max(1, normalizedRequiredSkills.length * 2));
+        const matchCount = toNumber(signal.matchCount);
+        const avgConfidence = toNumber(signal.avgConfidence, 0.5);
+        const endorsementCount = toNumber(signal.endorsementCount);
+        const repoSignalCount = toNumber(signal.repoSignalCount);
+        const matchedSkills = signal.matchedSkills.map((skill) => ({
+          ...skill,
+          confidence: toNumber(skill.confidence, 0.5),
+          proficiency: toNumber(skill.proficiency, 0.5),
+          endorsementCount: toNumber(skill.endorsementCount),
+          sourceRepos: Array.isArray(skill.sourceRepos) ? skill.sourceRepos : []
+        }));
+        const skillCoverage = matchCount / normalizedRequiredSkills.length;
+        const confidenceScore = Math.min(1, avgConfidence);
+        const endorsementScore = Math.min(1, endorsementCount / Math.max(1, normalizedRequiredSkills.length * 2));
         const institutionScore = sameDepartment ? 1 : sameUniversity ? 0.75 : 0.35;
-        const activityScore = Math.min(1, signal.repoSignalCount / Math.max(1, signal.matchCount * 2));
+        const activityScore = Math.min(1, repoSignalCount / Math.max(1, matchCount * 2));
         const matchScore = Math.round((
           skillCoverage * 0.4 +
           confidenceScore * 0.2 +
@@ -389,15 +416,15 @@ graphRouter.post("/matchmaker/candidates", async (req, res, next) => {
           institutionScore * 0.15 +
           activityScore * 0.1
         ) * 100);
-        const matchedSkillNames = signal.matchedSkills.map((skill) => skill.name);
+        const matchedSkillNames = matchedSkills.map((skill) => skill.name);
         const missingSkills = payload.requiredSkills.filter((skill) => (
           !matchedSkillNames.some((matchedSkill) => matchedSkill.toLowerCase() === skill.toLowerCase())
         ));
         const reasons = [
-          `${signal.matchCount} of ${normalizedRequiredSkills.length} required skills matched`,
+          `${matchCount} of ${normalizedRequiredSkills.length} required skills matched`,
           sameDepartment ? "same department" : sameUniversity ? "same university" : "cross-university candidate",
-          signal.repoSignalCount > 0 ? `${signal.repoSignalCount} repository evidence signals` : "limited repository evidence",
-          signal.endorsementCount > 0 ? `${signal.endorsementCount} peer endorsements` : "no peer endorsements yet"
+          repoSignalCount > 0 ? `${repoSignalCount} repository evidence signals` : "limited repository evidence",
+          endorsementCount > 0 ? `${endorsementCount} peer endorsements` : "no peer endorsements yet"
         ];
 
         return {
@@ -411,12 +438,12 @@ graphRouter.post("/matchmaker/candidates", async (req, res, next) => {
           sameUniversity,
           sameDepartment,
           matchScore,
-          matchedSkills: signal.matchedSkills,
+          matchedSkills,
           missingSkills,
           evidence: {
-            avgConfidence: Number(signal.avgConfidence.toFixed(2)),
-            endorsementCount: signal.endorsementCount,
-            repoSignalCount: signal.repoSignalCount
+            avgConfidence: Number(avgConfidence.toFixed(2)),
+            endorsementCount,
+            repoSignalCount
           },
           reasons
         };
