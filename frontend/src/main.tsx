@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "./components/shared/AppLayout";
 import { AdminDashboard } from "./pages/AdminDashboard";
 import { CareerFair } from "./pages/CareerFair";
@@ -22,7 +22,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route path="/login" element={<Login />} />
         <Route path="/galaxy/:handle" element={<PublicGalaxy />} />
         <Route element={<AppLayout />}>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/career-gps" element={<CareerGPS />} />
           <Route path="/matchmaker" element={<Matchmaker />} />
           <Route path="/resources" element={<Resources />} />
