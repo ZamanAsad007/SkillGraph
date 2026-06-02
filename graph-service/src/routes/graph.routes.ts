@@ -578,3 +578,30 @@ graphRouter.get("/skills/all", async (_req, res, next) => {
     next(error);
   }
 });
+
+
+// POST /graph/reactivate — reactivate a dormant skill
+
+graphRouter.post("/reactivate", async (req, res, next) => {
+  try {
+    const { studentId, skillName } = z.object({
+      studentId: z.string(),
+      skillName: z.string()
+    }).parse(req.body);
+
+    await runWrite(
+      `
+      MATCH (student:Student {id: $studentId})-[knows:KNOWS]->(skill:Skill {name: $skillName})
+      SET knows.dormant = false,
+          knows.lastActive = $lastActive,
+          knows.proficiency = coalesce(knows.confidence, 0.5),
+          knows.updatedAt = datetime()
+      `,
+      { studentId, skillName, lastActive: Date.now() }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
