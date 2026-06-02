@@ -10,6 +10,7 @@ import { resourcesRouter } from "./resources.routes.js";
 import { roleManagementRouter } from "./roleManagement.routes.js";
 import { decayRouter } from "./decay.routes.js";
 import simulatorRouter from "./simulator.routes.js";
+import { resumeRouter } from "./resume.routes.js";
 
 export const router = Router();
 
@@ -22,5 +23,6 @@ router.use("/team", teamRouter);
 router.use("/resources", resourcesRouter);
 router.use("/skills", decayRouter);
 router.use("/simulator", simulatorRouter);
+router.use("/resume", resumeRouter);
 router.use("/", roleManagementRouter);
 router.use("/", proxyRouter);
