@@ -6,6 +6,7 @@ import { matchmakerRouter } from "./matchmaker.routes.js";
 import notificationsRouter from "./notifications.routes.js";
 import { proxyRouter } from "./proxy.routes.js";
 import { teamRouter } from "./team.routes.js";
+import { resourcesRouter } from "./resources.routes.js";
 
 export const router = Router();
 
@@ -15,4 +16,5 @@ router.use("/matchmaker", matchmakerRouter);
 router.use("/endorsements", endorsementsRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/team", teamRouter);
+router.use("/resources", resourcesRouter);
 router.use("/", proxyRouter);

@@ -34,9 +34,15 @@ type RoadmapItem = {
   practiceProject: string;
   milestones: string[];
   resources: Array<{
+    id:string;
     title: string;
+    url:string;
     type: string;
-    url?: string;
+    provider: string | null;
+    durationHours: number | null;
+    isUniversityApproved: boolean;
+    courseCode: string | null;
+    rating: number | null;
   }>;
 };
 
@@ -53,29 +59,6 @@ function normalizeName(name: string) {
   return name.trim().toLowerCase();
 }
 
-function getSkillResource(skillName: string, category: string) {
-  const resources: Record<string, Array<{ title: string; type: string; url?: string }>> = {
-    react: [{ title: "React official learning path", type: "Documentation", url: "https://react.dev/learn" }],
-    javascript: [{ title: "MDN JavaScript Guide", type: "Documentation", url: "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide" }],
-    typescript: [{ title: "TypeScript Handbook", type: "Documentation", url: "https://www.typescriptlang.org/docs/handbook/intro.html" }],
-    postgresql: [{ title: "PostgreSQL tutorial", type: "Documentation", url: "https://www.postgresql.org/docs/current/tutorial.html" }],
-    docker: [{ title: "Docker getting started", type: "Tutorial", url: "https://docs.docker.com/get-started/" }],
-    kubernetes: [{ title: "Kubernetes basics", type: "Tutorial", url: "https://kubernetes.io/docs/tutorials/kubernetes-basics/" }],
-    playwright: [{ title: "Playwright intro", type: "Documentation", url: "https://playwright.dev/docs/intro" }],
-    "owasp top 10": [{ title: "OWASP Top 10", type: "Reference", url: "https://owasp.org/www-project-top-ten/" }],
-    aws: [{ title: "AWS Skill Builder", type: "Course", url: "https://skillbuilder.aws/" }],
-    figma: [{ title: "Figma resource library", type: "Guide", url: "https://www.figma.com/resource-library/" }],
-    python: [{ title: "Python tutorial", type: "Documentation", url: "https://docs.python.org/3/tutorial/" }],
-    sql: [{ title: "SQLBolt lessons", type: "Interactive", url: "https://sqlbolt.com/" }]
-  };
-
-  const key = normalizeName(skillName);
-  return resources[key] ?? [{
-    title: `${category} focused practice plan`,
-    type: "Practice",
-    url: undefined
-  }];
-}
 
 function getRoadmapDetails(skillName: string, category: string, roleName: string, difficulty: number) {
   const lowerName = normalizeName(skillName);
@@ -121,8 +104,7 @@ function getRoadmapDetails(skillName: string, category: string, roleName: string
   return {
     objective: objectiveByCategory[categoryLower] ?? `Apply ${skillName} in a realistic ${roleName} task.`,
     practiceProject: projectBySkill[lowerName] ?? `Build a ${roleName} portfolio artifact that demonstrates ${skillName}.`,
-    milestones,
-    resources: getSkillResource(skillName, category)
+    milestones
   };
 }
 
@@ -197,8 +179,46 @@ export async function getCareerGPS(req: Request, res: Response) {
       return !names.some((name) => studentSkillNames.has(name));
     });
 
+      // Query learning resources dynamically for all missing skills in one query
+    const missingSkillIds = missingSkills.map((s) => s.id);
+    const dbResources = await prisma.learningResource.findMany({
+      where: {
+        skills: {
+          some: {
+            skillId: { in: missingSkillIds }
+          }
+        }
+      },
+      include: {
+        skills: {
+          select: {
+            skillId: true
+          }
+        }
+      },
+      orderBy: [
+        { isUniversityApproved: "desc" },
+        { rating: "desc" }
+      ]
+    });
+
+    // Group resources by skillId
+    const resourceMap: Record<string, typeof dbResources> = {};
+    for (const resItem of dbResources) {
+      for (const rs of resItem.skills) {
+        if (!resourceMap[rs.skillId]) {
+          resourceMap[rs.skillId] = [];
+        }
+        if (resourceMap[rs.skillId].length < 5) {
+          resourceMap[rs.skillId].push(resItem);
+        }
+      }
+    }
+
+
     const roadmap: RoadmapItem[] = missingSkills.map((skill, index) => {
       const details = getRoadmapDetails(skill.name, skill.category, role.title, skill.learningDifficulty);
+      const skillResources = resourceMap[skill.id] || [];
 
       return {
         skillId: skill.id,
@@ -208,7 +228,20 @@ export async function getCareerGPS(req: Request, res: Response) {
         prerequisites: index === 0 ? [] : missingSkills.slice(0, index).map((item) => item.name).slice(-2),
         estimatedWeeks: estimateWeeks(skill.learningDifficulty, skill.criticality),
         criticality: skill.criticality,
-        ...details
+        objective: details.objective,
+        practiceProject: details.practiceProject,
+        milestones: details.milestones,
+        resources: skillResources.map((res) => ({
+          id: res.id,
+          title: res.title,
+          url: res.url,
+          type: res.type,
+          provider: res.provider,
+          durationHours: res.durationHours,
+          isUniversityApproved: res.isUniversityApproved,
+          courseCode: res.courseCode,
+          rating: res.rating
+        }))
       };
     });
 
