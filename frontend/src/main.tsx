@@ -12,6 +12,7 @@ import { MentorMatch } from "./pages/MentorMatch";
 import { Notifications } from "./pages/Notifications";
 import { OAuthCallback } from "./pages/OAuthCallback";
 import { PublicGalaxy } from "./pages/PublicGalaxy";
+import{ Landing } from "./pages/Landing"
 import { Resources } from "./pages/Resources";
 import { Settings } from "./pages/Settings";
 import { WhatIfSimulator } from "./pages/WhatIfSimulator";
@@ -21,6 +22,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
+        <Route path="/landing" element={<Landing />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Login />} />
         <Route path="/api/auth/google/callback" element={<OAuthCallback provider="google" />} />

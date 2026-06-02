@@ -87,6 +87,7 @@ model StudentProfile {
   resumeExports     ResumeExport[]
   decayAudits       SkillDecayAudit[]
   simulatedPaths    SimulatedPath[]
+  resourceCompletions StudentResourceCompletion[]
 
   @@map("student_profiles")
 }
@@ -226,6 +227,7 @@ model Skill {
   requirements    RoleRequirement[]
   endorsements    PeerEndorsement[]
   mentorships     AlumniMentorship[]
+  resources       ResourceSkill[]
 
   @@map("skills")
 }
@@ -267,8 +269,33 @@ model LearningResource {
   courseCode           String?  @map("course_code") @db.VarChar(20)
   rating               Float?
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
+  skills               ResourceSkill[]
+  completions          StudentResourceCompletion[]
   @@map("learning_resources")
+}
+
+
+model ResourceSkill {
+  id         String           @id @default(uuid()) @db.Uuid
+  resourceId String           @map("resource_id") @db.Uuid
+  skillId    String           @map("skill_id") @db.Uuid
+  resource   LearningResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  skill      Skill            @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, skillId])
+  @@map("resource_skills")
+}
+
+model StudentResourceCompletion {
+  id          String           @id @default(uuid()) @db.Uuid
+  studentId   String           @map("student_id") @db.Uuid
+  resourceId  String           @map("resource_id") @db.Uuid
+  completedAt DateTime         @default(now()) @map("completed_at") @db.Timestamptz(6)
+  student     StudentProfile   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  resource    LearningResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, resourceId])
+  @@map("student_resource_completions")
 }
 
 model Certification {

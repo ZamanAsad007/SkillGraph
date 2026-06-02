@@ -56,6 +56,7 @@ Table student_profiles {
   resumeExports resume_exports [not null]
   decayAudits skill_decay_audits [not null]
   simulatedPaths simulated_paths [not null]
+  resourceCompletions student_resource_completions [not null]
 }
 
 Table universities {
@@ -176,6 +177,7 @@ Table skills {
   requirements role_requirements [not null]
   endorsements peer_endorsements [not null]
   mentorships alumni_mentorships [not null]
+  resources resource_skills [not null]
 }
 
 Table industry_roles {
@@ -214,6 +216,33 @@ Table learning_resources {
   courseCode String
   rating Float
   createdAt DateTime [default: `now()`, not null]
+  skills resource_skills [not null]
+  completions student_resource_completions [not null]
+}
+
+Table resource_skills {
+  id String [pk]
+  resourceId String [not null]
+  skillId String [not null]
+  resource learning_resources [not null]
+  skill skills [not null]
+
+  indexes {
+    (resourceId, skillId) [unique]
+  }
+}
+
+Table student_resource_completions {
+  id String [pk]
+  studentId String [not null]
+  resourceId String [not null]
+  completedAt DateTime [default: `now()`, not null]
+  student student_profiles [not null]
+  resource learning_resources [not null]
+
+  indexes {
+    (studentId, resourceId) [unique]
+  }
 }
 
 Table certifications {
@@ -458,6 +487,14 @@ Ref: skills.categoryId > skill_categories.id
 Ref: role_requirements.roleId > industry_roles.id [delete: Cascade]
 
 Ref: role_requirements.skillId > skills.id
+
+Ref: resource_skills.resourceId > learning_resources.id [delete: Cascade]
+
+Ref: resource_skills.skillId > skills.id [delete: Cascade]
+
+Ref: student_resource_completions.studentId > student_profiles.id [delete: Cascade]
+
+Ref: student_resource_completions.resourceId > learning_resources.id [delete: Cascade]
 
 Ref: certifications.studentId > student_profiles.id
 
