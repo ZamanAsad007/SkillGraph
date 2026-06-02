@@ -58,7 +58,10 @@ proxyRouter.get("/career-gps/history/:studentId", requireAuth, asyncHandler(asyn
   res.status(response.status).json(await response.json());
 }));
 
-proxyRouter.get("/admin/analytics/skill-heatmap", requireAuth, requireRole(["admin", "professor"]), (_req, res) => res.json({ success: true, data: [] }));
+proxyRouter.get("/admin/analytics/skill-heatmap", requireAuth, requireRole(["admin", "professor"]), asyncHandler(async (_req, res) => {
+  const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/analytics/skill-heatmap`);
+  res.status(response.status).json(await response.json());
+}));
 
 proxyRouter.get("/admin/analytics/industry-gap", requireAuth, requireRole(["admin", "professor"]), asyncHandler(async (_req, res) => {
   const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/analytics/industry-gap`);
@@ -72,5 +75,14 @@ proxyRouter.get("/admin/analytics/missing-skills", requireAuth, requireRole(["ad
 
 proxyRouter.get("/admin/analytics/trend", requireAuth, requireRole(["admin", "professor"]), asyncHandler(async (_req, res) => {
   const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/analytics/trend`);
+  res.status(response.status).json(await response.json());
+}));
+
+proxyRouter.post("/simulator/run", requireAuth, asyncHandler(async (req, res) => {
+  const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/simulator/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req.body)
+  });
   res.status(response.status).json(await response.json());
 }));

@@ -9,6 +9,7 @@ import { teamRouter } from "./team.routes.js";
 import { resourcesRouter } from "./resources.routes.js";
 import { roleManagementRouter } from "./roleManagement.routes.js";
 import { decayRouter } from "./decay.routes.js";
+import simulatorRouter from "./simulator.routes.js";
 
 export const router = Router();
 
@@ -20,5 +21,6 @@ router.use("/notifications", notificationsRouter);
 router.use("/team", teamRouter);
 router.use("/resources", resourcesRouter);
 router.use("/skills", decayRouter);
+router.use("/simulator", simulatorRouter);
 router.use("/", roleManagementRouter);
 router.use("/", proxyRouter);
