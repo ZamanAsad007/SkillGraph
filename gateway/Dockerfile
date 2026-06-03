@@ -1,6 +1,8 @@
 FROM node:20-alpine
 WORKDIR /app
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 COPY package*.json ./
 COPY packages/database/package.json ./packages/database/package.json
 COPY gateway/package.json ./gateway/package.json

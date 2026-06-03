@@ -19,7 +19,7 @@ function getChromeExecutablePath() {
 }
 
 // Helper to generate ATS-friendly HTML template
-function buildResumeHtml(data: {
+export function buildResumeHtml(data: {
   fullName: string;
   email: string | null;
   githubHandle: string | null;
@@ -233,7 +233,7 @@ function buildResumeHtml(data: {
 }
 
 // Load resume details for preview or export
-async function getResumeData(userId: string, roleId?: string) {
+export async function getResumeData(userId: string, roleId?: string) {
   const student = await prisma.studentProfile.findUnique({
     where: { userId },
     include: {
@@ -262,7 +262,7 @@ async function getResumeData(userId: string, roleId?: string) {
     const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/student/${userId}/skills`);
     if (response.ok) {
       const body = await response.json();
-      skills = body?.data || [];
+      skills = body?.data?.skills || [];
     }
   } catch (err) {
     console.error("Failed to fetch student skills from graph-service:", err);
@@ -452,7 +452,7 @@ export async function exportResumePdf(req: Request, res: Response) {
       "Content-Disposition",
       `attachment; filename=resume_${data.student.publicHandle || "export"}.pdf`
     );
-    res.send(pdfBuffer);
+    res.send(Buffer.from(pdfBuffer));
   } catch (error) {
     console.error("Resume export PDF error:", error);
     if (error instanceof Error && error.message === "STUDENT_NOT_FOUND") {

@@ -76,7 +76,7 @@ export async function getFairMatches(req: Request, res: Response) {
       const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/student/${resolvedUserId}/skills`);
       if (response.ok) {
         const body = await response.json();
-        skills = body?.data || [];
+        skills = body?.data?.skills || [];
       }
     } catch (err) {
       console.error("Failed to fetch student skills from graph-service:", err);

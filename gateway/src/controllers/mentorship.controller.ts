@@ -64,7 +64,7 @@ export async function getRecommendedMentors(req: Request, res: Response) {
         const skillsResponse = await fetch(`${env.GRAPH_SERVICE_URL}/graph/student/${req.user.id}/skills`);
         if (skillsResponse.ok) {
           const body = await skillsResponse.json();
-          const skills = body?.data || [];
+          const skills = body?.data?.skills || [];
           const weakOrDormant = skills.filter((s: any) => s.dormant || s.confidence < 0.65);
           targetSkillNames = weakOrDormant.map((s: any) => s.name.toLowerCase());
         }
