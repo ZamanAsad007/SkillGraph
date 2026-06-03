@@ -2,6 +2,7 @@ import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { runWrite } from "../neo4j/driver.js";
 
+const redis=new Redis(env.REDIS_URL);
 const STREAM_KEY = "graph:update:queue";
 const CONSUMER_GROUP = "graph-service";
 const CONSUMER_NAME = `graph-service-${process.pid}`;
@@ -81,6 +82,23 @@ async function processMessage(message: GraphUpdateMessage): Promise<void> {
     );
   }
 
+    // Invalidate Redis cache keys for this student
+  try {
+    const keys = await redis.keys(`career-gps:${student_id}:*`);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+      console.log(
+        `[graphUpdate.consumer] Invalidated ${keys.length} cached GPS paths for student ${student_id}`
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[graphUpdate.consumer] Failed to invalidate Redis cache for student ${student_id}:`,
+      err
+    );
+  }
+
+  
   console.log(
     `[graphUpdate.consumer] Synced ${extracted_skills.length} skills for student ${student_id}`
   );

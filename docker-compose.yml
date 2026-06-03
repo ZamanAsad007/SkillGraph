@@ -6,16 +6,18 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      GRAPH_SERVICE_URL: http://graph-service:3001
-      NLP_SERVICE_URL: http://nlp-service:8001
       POSTGRES_HOST: postgres
     ports:
       - "3000:3000"
     depends_on:
-      - postgres
-      - redis
-      - graph-service
-      - nlp-service
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      graph-service:
+        condition: service_started
+      nlp-service:
+        condition: service_started
 
   nlp-service:
     build: ./nlp-service
@@ -26,7 +28,8 @@ services:
     ports:
       - "8001:8001"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   graph-service:
     build:
@@ -39,19 +42,27 @@ services:
     ports:
       - "3001:3001"
     depends_on:
-      - neo4j
-      - postgres
-      - redis
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   notification-service:
     build:
       context: .
       dockerfile: notification-service/Dockerfile
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     ports:
       - "3002:3002"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   decay-worker:
     build:
@@ -62,8 +73,10 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POSTGRES_HOST: postgres
     depends_on:
-      - neo4j
-      - postgres
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:
@@ -73,8 +86,10 @@ services:
     ports:
       - "5173:5173"
     depends_on:
-      - gateway
-      - notification-service
+      gateway:
+        condition: service_started
+      notification-service:
+        condition: service_started
 
   postgres:
     image: postgres:16-alpine
@@ -86,6 +101,11 @@ services:
       - "${POSTGRES_PORT}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   neo4j:
     image: neo4j:5-community
@@ -97,11 +117,21 @@ services:
       - "7687:7687"
     volumes:
       - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u $$NEO4J_USER -p $$NEO4J_PASSWORD 'RETURN 1'"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres-data:
