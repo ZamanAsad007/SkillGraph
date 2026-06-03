@@ -13,6 +13,7 @@ import {
   redirectToGoogle,
   registerWithEmail,
   updateAcademicProfile,
+  updateUserRole,
   verifyEmail
 } from "../controllers/auth.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
@@ -33,6 +34,7 @@ authRouter.get("/academic-options", requireAuth, asyncHandler(getAcademicOptions
 authRouter.post("/universities", requireAuth, asyncHandler(createUniversity));
 authRouter.post("/departments", requireAuth, asyncHandler(createDepartment));
 authRouter.patch("/academic-profile", requireAuth, asyncHandler(updateAcademicProfile));
+authRouter.patch("/role", requireAuth, asyncHandler(updateUserRole));
 authRouter.get("/socket-token", requireAuth, getSocketToken);
 authRouter.post("/refresh", requireAuth, (_req, res) => res.json({ success: true, data: null }));
 authRouter.post("/logout", requireAuth, logout);

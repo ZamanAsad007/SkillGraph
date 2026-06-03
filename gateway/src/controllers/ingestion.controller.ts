@@ -6,7 +6,7 @@ import { decryptToken } from "../utils/crypto.js";
 import { getRedis } from "../utils/redis.js";
 
 const SEVENTY_TWO_HOURS_MS = 72 * 60 * 60 * 1000;
-const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; 
+const RATE_LIMIT_WINDOW_MS = env.NODE_ENV === "development" ? 5 * 1000 : 60 * 60 * 1000;
 
 type GithubRepositoryPayload = {
   id: number;
@@ -141,7 +141,7 @@ export async function getIngestionStatus(req: Request, res: Response) {
   const redis = await getRedis();
   const statusData = await redis.hGetAll(`ingestion:status:${req.params.userId}`);
   const manualIngestionAvailableAt = await getManualIngestionAvailableAt(req.params.userId);
-
+  
   if (!statusData || Object.keys(statusData).length === 0) {
     // Check if user has any repositories (legacy check)
     const repositoryCount = await prisma.githubRepository.count({ where: { userId: req.params.userId } });

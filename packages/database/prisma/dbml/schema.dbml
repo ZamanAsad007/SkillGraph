@@ -378,6 +378,8 @@ Table alumni_profiles {
   mentoringSkills String[] [not null]
   willingToMentor Boolean [not null, default: false]
   linkedinUrl String
+  alumniCardUrl String
+  verified Boolean [not null, default: false]
   createdAt DateTime [default: `now()`, not null]
   user users [not null]
   mentorships alumni_mentorships [not null]

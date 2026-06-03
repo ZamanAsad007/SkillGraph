@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { prisma } from "@skillgraph/database";
 import { fail, ok } from "../utils/apiResponse.js";
 import { env } from "../config/env.js";
+import { setAuthCookies } from "./auth.controller.js";
 
 // Fetch recommended alumni mentors based on student's missing skills or weak skills
 export async function getRecommendedMentors(req: Request, res: Response) {
@@ -77,6 +78,7 @@ export async function getRecommendedMentors(req: Request, res: Response) {
     const alumniProfiles = await prisma.alumniProfile.findMany({
       where: {
         willingToMentor: true,
+        verified: true,
         // Don't recommend yourself if you are also registered as an alumnus
         userId: { not: req.user.id }
       },
@@ -306,7 +308,8 @@ export async function registerAlumni(req: Request, res: Response) {
     yearsExperience,
     mentoringSkills,
     willingToMentor,
-    linkedinUrl
+    linkedinUrl,
+    alumniCardUrl
   } = req.body as {
     graduationYear?: number;
     currentCompany?: string;
@@ -315,9 +318,21 @@ export async function registerAlumni(req: Request, res: Response) {
     mentoringSkills?: string[];
     willingToMentor?: boolean;
     linkedinUrl?: string;
+    alumniCardUrl?: string;
   };
 
   try {
+    const existingProfile = await prisma.alumniProfile.findUnique({
+      where: { userId: req.user.id }
+    });
+
+    let verified = false;
+    if (existingProfile) {
+      if (alumniCardUrl === undefined || alumniCardUrl === existingProfile.alumniCardUrl) {
+        verified = existingProfile.verified;
+      }
+    }
+
     const profile = await prisma.alumniProfile.upsert({
       where: { userId: req.user.id },
       create: {
@@ -328,7 +343,9 @@ export async function registerAlumni(req: Request, res: Response) {
         yearsExperience,
         mentoringSkills: mentoringSkills || [],
         willingToMentor: willingToMentor !== undefined ? willingToMentor : true,
-        linkedinUrl
+        linkedinUrl,
+        alumniCardUrl,
+        verified: false
       },
       update: {
         graduationYear,
@@ -337,11 +354,19 @@ export async function registerAlumni(req: Request, res: Response) {
         yearsExperience,
         mentoringSkills: mentoringSkills || [],
         willingToMentor: willingToMentor !== undefined ? willingToMentor : true,
-        linkedinUrl
+        linkedinUrl,
+        alumniCardUrl: alumniCardUrl !== undefined ? alumniCardUrl : undefined,
+        verified
       }
     });
 
-    // Set user role as alumnus in DB if needed or just keep current role
+    const updatedUser = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { role: "alumni" }
+    });
+
+    setAuthCookies(res, updatedUser);
+
     ok(res, profile);
   } catch (error) {
     console.error("Failed to register alumnus profile:", error);

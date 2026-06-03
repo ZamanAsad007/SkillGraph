@@ -6,7 +6,6 @@ import { prisma } from "@skillgraph/database";
 import { env } from "../config/env.js";
 import { ok, fail } from "../utils/apiResponse.js";
 import { encryptToken } from "../utils/crypto.js";
-import { isEmailConfigured, sendVerificationEmail } from "../utils/email.js";
 import { signAccessToken, signRefreshToken, verifyToken } from "../utils/jwt.js";
 import { getRedis } from "../utils/redis.js";
 
@@ -121,7 +120,7 @@ function refreshCookieOptions() {
   };
 }
 
-function setAuthCookies(res: Response, user: { id: string; role: any; githubHandle?: string | null }) {
+export function setAuthCookies(res: Response, user: { id: string; role: any; githubHandle?: string | null }) {
   const accessToken = signAccessToken({
     sub: user.id,
     role: user.role,
@@ -164,10 +163,9 @@ export function redirectToGithub(req: Request, res: Response) {
     return;
   }
 
-  const callbackUrl = env.GITHUB_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/github/callback`;
   const params = new URLSearchParams({
     client_id: env.GITHUB_CLIENT_ID,
-    redirect_uri: callbackUrl,
+    redirect_uri: env.GITHUB_CALLBACK_URL ?? "",
     scope: "read:user user:email public_repo",
     allow_signup: "true"
   });
@@ -195,7 +193,7 @@ export async function githubCallback(req: Request, res: Response) {
       client_id: env.GITHUB_CLIENT_ID,
       client_secret: env.GITHUB_CLIENT_SECRET,
       code,
-      redirect_uri: env.GITHUB_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/github/callback`
+      redirect_uri: env.GITHUB_CALLBACK_URL
     })
   });
   const tokenPayload = (await tokenResponse.json()) as GithubTokenResponse;
@@ -220,14 +218,9 @@ export async function githubCallback(req: Request, res: Response) {
   }
 
   const authenticatedUserId = getAuthenticatedUserId(req);
-  const linkRequested = req.query.state === "link";
   const githubEmail = githubUser.email?.trim().toLowerCase();
   const existingGithubUser = await prisma.user.findUnique({
     where: { githubId: String(githubUser.id) },
-    include: { studentProfile: true }
-  });
-  const existingGithubHandleUser = await prisma.user.findUnique({
-    where: { githubHandle: githubUser.login },
     include: { studentProfile: true }
   });
   const existingEmailUser = githubEmail
@@ -236,53 +229,27 @@ export async function githubCallback(req: Request, res: Response) {
         include: { studentProfile: true }
       })
     : null;
-  const authenticatedUser = authenticatedUserId
-    ? await prisma.user.findUnique({ where: { id: authenticatedUserId }, include: { studentProfile: true } })
-    : null;
 
-  const conflictingGithubUser = existingGithubUser?.id !== authenticatedUserId
-    ? existingGithubUser
-    : existingGithubHandleUser?.id !== authenticatedUserId
-    ? existingGithubHandleUser
-    : null;
-
-  if (authenticatedUserId && conflictingGithubUser) {
-    if (!linkRequested) {
-      fail(res, "GITHUB_ALREADY_LINKED", "This GitHub account is already linked to another SkillGraph user", 409);
-      return;
-    }
-
-    await prisma.$transaction([
-      prisma.oauthConnection.deleteMany({
-        where: { userId: conflictingGithubUser.id, provider: "github" }
-      }),
-      prisma.user.update({
-        where: { id: conflictingGithubUser.id },
-        data: {
-          githubId: null,
-          githubHandle: null
-        }
-      })
-    ]);
+  if (authenticatedUserId && existingGithubUser && existingGithubUser.id !== authenticatedUserId) {
+    fail(res, "GITHUB_ALREADY_LINKED", "This GitHub account is already linked to another SkillGraph user", 409);
+    return;
+  }
+  if (authenticatedUserId && existingEmailUser && existingEmailUser.id !== authenticatedUserId) {
+    fail(res, "EMAIL_ALREADY_LINKED", "This GitHub email is already used by another SkillGraph user", 409);
+    return;
   }
 
   let user;
   if (authenticatedUserId) {
-    const canUseGithubEmail = Boolean(
-      githubEmail &&
-      (!existingEmailUser || existingEmailUser.id === authenticatedUserId) &&
-      !authenticatedUser?.email
-    );
-
     user = await prisma.user.update({
       where: { id: authenticatedUserId },
       data: {
         githubId: String(githubUser.id),
         githubHandle: githubUser.login,
-        email: canUseGithubEmail ? githubEmail : undefined,
-        emailVerifiedAt: canUseGithubEmail ? new Date() : undefined,
-        fullName: authenticatedUser?.fullName ?? githubUser.name ?? githubUser.login,
-        avatarUrl: authenticatedUser?.avatarUrl ?? githubUser.avatar_url
+        email: githubEmail,
+        emailVerifiedAt: githubEmail ? new Date() : undefined,
+        fullName: githubUser.name ?? githubUser.login,
+        avatarUrl: githubUser.avatar_url
       },
       include: { studentProfile: true }
     });
@@ -351,10 +318,9 @@ export function redirectToGoogle(_req: Request, res: Response) {
     return;
   }
 
-  const callbackUrl = env.GOOGLE_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/google/callback`;
   const params = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
-    redirect_uri: callbackUrl,
+    redirect_uri: env.GOOGLE_CALLBACK_URL ?? "",
     response_type: "code",
     scope: "openid email profile",
     access_type: "offline",
@@ -376,7 +342,6 @@ export async function googleCallback(req: Request, res: Response) {
     return;
   }
 
-  const callbackUrl = env.GOOGLE_CALLBACK_URL ?? `${env.FRONTEND_URL.replace(/\/$/, "")}/api/auth/google/callback`;
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -385,7 +350,7 @@ export async function googleCallback(req: Request, res: Response) {
       client_secret: env.GOOGLE_CLIENT_SECRET,
       code,
       grant_type: "authorization_code",
-      redirect_uri: callbackUrl
+      redirect_uri: env.GOOGLE_CALLBACK_URL ?? ""
     })
   });
   const tokenPayload = (await tokenResponse.json()) as GoogleTokenResponse;
@@ -445,13 +410,20 @@ export async function googleCallback(req: Request, res: Response) {
 }
 
 export async function registerWithEmail(req: Request, res: Response) {
-  const { fullName, email, password } = req.body as { fullName?: string; email?: string; password?: string };
+  const { fullName, email, password, role } = req.body as {
+    fullName?: string;
+    email?: string;
+    password?: string;
+    role?: string;
+  };
   const normalizedEmail = email?.trim().toLowerCase();
 
   if (!fullName?.trim() || !normalizedEmail || !password || password.length < 8) {
     fail(res, "INVALID_REGISTRATION", "Full name, valid email, and an 8+ character password are required", 400);
     return;
   }
+
+  const validRole = (role && ["student", "professor", "alumni"].includes(role)) ? role : "student";
 
   const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
   if (existing) {
@@ -460,39 +432,32 @@ export async function registerWithEmail(req: Request, res: Response) {
   }
 
   const verificationToken = crypto.randomBytes(32).toString("base64url");
-  const user = await prisma.user.create({
-    data: {
-      email: normalizedEmail,
-      fullName: fullName.trim(),
-      passwordHash: await hashPassword(password),
-      emailVerificationTokenHash: hashToken(verificationToken),
-      emailVerificationExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      studentProfile: { create: { publicHandle: await generateUniquePublicHandle(normalizedEmail) } }
-    },
-    include: { studentProfile: true }
-  });
 
-  let emailSent = false;
-  if (isEmailConfigured()) {
-    try {
-      await sendVerificationEmail(normalizedEmail, verificationToken);
-      emailSent = true;
-    } catch (error) {
-      console.error("Email verification send failed:", error);
+  const userData: any = {
+    email: normalizedEmail,
+    fullName: fullName.trim(),
+    passwordHash: await hashPassword(password),
+    emailVerificationTokenHash: hashToken(verificationToken),
+    emailVerificationExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    role: validRole
+  };
 
-      if (env.NODE_ENV === "production") {
-        fail(res, "EMAIL_SEND_FAILED", "Account created, but the verification email could not be sent. Please contact support.", 503);
-        return;
-      }
-    }
+  if (validRole === "alumni") {
+    userData.alumniProfile = { create: { willingToMentor: true } };
+  } else if (validRole === "student") {
+    userData.studentProfile = { create: { publicHandle: await generateUniquePublicHandle(normalizedEmail) } };
   }
+
+  const user = await prisma.user.create({
+    data: userData,
+    include: { studentProfile: true, alumniProfile: true }
+  });
 
   ok(res, {
     id: user.id,
     email: user.email,
     emailVerificationRequired: true,
-    emailSent,
-    verificationToken: env.NODE_ENV === "production" || emailSent ? undefined : verificationToken
+    verificationToken: env.NODE_ENV === "production" ? undefined : verificationToken
   }, 201);
 }
 
@@ -780,4 +745,57 @@ export function getSocketToken(req: Request, res: Response) {
     githubHandle: req.user.githubHandle
   });
   ok(res, { token: socketToken });
+}
+
+export async function updateUserRole(req: Request, res: Response) {
+  if (!req.user) {
+    fail(res, "UNAUTHORIZED", "Missing authenticated user", 401);
+    return;
+  }
+
+  const { role } = req.body as { role?: string };
+  if (!role || !["student", "professor", "alumni"].includes(role)) {
+    fail(res, "INVALID_ROLE", "Role must be 'student', 'professor', or 'alumni'", 400);
+    return;
+  }
+
+  try {
+    const userId = req.user.id;
+
+    // Check if the user already has the target profile, if not create it
+    if (role === "student") {
+      const existingStudent = await prisma.studentProfile.findUnique({ where: { userId } });
+      if (!existingStudent) {
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        const seed = user?.email ?? user?.fullName ?? "user";
+        await prisma.studentProfile.create({
+          data: {
+            userId,
+            publicHandle: await generateUniquePublicHandle(seed)
+          }
+        });
+      }
+    } else if (role === "alumni") {
+      const existingAlumni = await prisma.alumniProfile.findUnique({ where: { userId } });
+      if (!existingAlumni) {
+        await prisma.alumniProfile.create({
+          data: {
+            userId,
+            willingToMentor: true
+          }
+        });
+      }
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { role: role as any }
+    });
+
+    setAuthCookies(res, updatedUser);
+    ok(res, { role: updatedUser.role });
+  } catch (error) {
+    console.error("Failed to update user role:", error);
+    fail(res, "INTERNAL_ERROR", "Failed to update user role", 500);
+  }
 }
