@@ -11,6 +11,7 @@ import { roleManagementRouter } from "./roleManagement.routes.js";
 import { decayRouter } from "./decay.routes.js";
 import simulatorRouter from "./simulator.routes.js";
 import { resumeRouter } from "./resume.routes.js";
+import { careerFairRouter } from "./careerFair.routes.js";
 
 export const router = Router();
 
@@ -24,5 +25,6 @@ router.use("/resources", resourcesRouter);
 router.use("/skills", decayRouter);
 router.use("/simulator", simulatorRouter);
 router.use("/resume", resumeRouter);
+router.use("/career-fair", careerFairRouter);
 router.use("/", roleManagementRouter);
 router.use("/", proxyRouter);
