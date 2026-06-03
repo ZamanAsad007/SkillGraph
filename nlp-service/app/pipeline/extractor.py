@@ -9,9 +9,14 @@ Steps:
   5. Confidence scoring + deduplication
 """
 
+import logging
+import os
+import json
+import httpx
 from collections import defaultdict
 from typing import Optional
 
+logger = logging.getLogger("nlp-service")
 try:
     import spacy
     from spacy.language import Language as SpacyLanguage
@@ -112,6 +117,106 @@ def filter_candidates(doc) -> list[str]:
         if token.pos_ in _CANDIDATE_POS and token.dep_ in _CANDIDATE_DEPS
     ]
 
+def extract_skills_via_gemini(repositories: list[dict], api_key: str) -> list[dict]:
+    """
+    Extract skills from repositories using the Gemini 1.5 Flash API with JSON schema enforcement.
+    """
+    repos_desc = []
+    for repo in repositories:
+        name = repo.get("name", "unknown")
+        desc = repo.get("description", "")
+        readme = repo.get("readme", "")
+        # Truncate readme to avoid excessive token count
+        readme_trunc = readme[:30_000] if readme else ""
+        commits = ", ".join(repo.get("commits", []))
+        repos_desc.append(
+            f"Repository Name: {name}\n"
+            f"Description: {desc}\n"
+            f"README: {readme_trunc}\n"
+            f"Recent Commits: {commits}\n"
+            f"---"
+        )
+    
+    prompt = (
+        "You are an expert NLP system for extracting technical skills from developer profiles.\n"
+        "Analyze the following list of GitHub repositories (each with a name, description, README content, and recent commits) for a student.\n"
+        "Extract all technical skills (languages, frameworks, libraries, tools, databases, runtimes, cloud platforms, DevOps tools, etc.) that the student has used in these repositories.\n\n"
+        "For each extracted skill, provide:\n"
+        "1. skill_name: The standard, official name of the technology (e.g. 'React', 'TypeScript', 'PostgreSQL', 'Docker', 'SvelteKit', 'Go').\n"
+        "2. confidence: A confidence score between 0.0 and 1.0. A skill mentioned once or in a tutorial has low confidence (~0.5-0.6). A skill mentioned frequently across commits and multiple repositories has high confidence (~0.8-1.0).\n"
+        "3. source_repos: A list of repository names where this skill was identified.\n\n"
+        "Guidelines:\n"
+        "- Return ONLY technologies actually used. Avoid extracting terms mentioned in comparison or negation (e.g., 'not using Angular' or 'migrating from Java').\n"
+        "- Expose only real technical skills. Avoid generic nouns like 'development', 'code', 'repository', 'software', 'project', etc.\n"
+        "- Standardize aliases (e.g. translate 'react.js' or 'reactjs' to 'React').\n"
+        "- Deduplicate the output by skill_name.\n\n"
+        f"Input Repositories:\n"
+        + "\n".join(repos_desc)
+    )
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "extracted_skills": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "skill_name": {"type": "STRING"},
+                                "confidence": {"type": "NUMBER"},
+                                "source_repos": {
+                                    "type": "ARRAY",
+                                    "items": {"type": "STRING"}
+                                }
+                            },
+                            "required": ["skill_name", "confidence", "source_repos"]
+                        }
+                    }
+                },
+                "required": ["extracted_skills"]
+            }
+        }
+    }
+
+    # Call the Gemini API synchronously using httpx
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(url, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        
+        # Extract response text
+        candidates_text = result["candidates"][0]["content"]["parts"][0]["text"]
+        data = json.loads(candidates_text)
+        
+        # Validate output is a list of dicts with appropriate structure
+        extracted_skills = data.get("extracted_skills", [])
+        
+        # Clean and round confidence scores
+        cleaned = []
+        for skill in extracted_skills:
+            name = skill.get("skill_name")
+            conf = skill.get("confidence", 0.5)
+            repos = skill.get("source_repos", [])
+            if name:
+                cleaned.append({
+                    "skill_name": str(name).strip(),
+                    "confidence": round(float(conf), 2),
+                    "source_repos": [str(r) for r in repos]
+                })
+        return cleaned
+
 
 # ---------------------------------------------------------------------------
 # Full pipeline: extract_skills
@@ -121,8 +226,8 @@ def extract_skills(student_id: str, repositories: list[dict]) -> dict:
     """
     Run the full 5-step NLP extraction pipeline over a list of repositories.
 
-    Steps 1–3 are implemented here; Steps 4–5 use the gazetteer alias lookup
-    and confidence scoring.
+ Attempts to use Gemini 1.5 Flash if GEMINI_API_KEY is defined in the environment.
+    Falls back to the local spaCy-based extraction pipeline on error or if the key is missing.
 
     Args:
         student_id: The student's UUID string.
@@ -134,6 +239,24 @@ def extract_skills(student_id: str, repositories: list[dict]) -> dict:
           - student_id: str
           - extracted_skills: list of {skill_name, confidence, source_repos}
     """
+    # ------------------------------------------------------------------
+    # Step 0: Try Gemini 1.5 Flash API if configured
+    # ------------------------------------------------------------------
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if api_key and api_key != "replace-me":
+        try:
+            logger.info(f"Attempting Gemini skill extraction for student: {student_id}")
+            extracted_skills = extract_skills_via_gemini(repositories, api_key)
+            return {"student_id": student_id, "extracted_skills": extracted_skills}
+        except Exception as exc:
+            logger.error(
+                f"Gemini API extraction failed for student {student_id}: {exc}. "
+                "Falling back to local spaCy pipeline."
+            )
+
+    # ------------------------------------------------------------------
+    # Fallback: spaCy Rule-based/Gazetteer Pipeline
+    # ------------------------------------------------------------------
     nlp = get_nlp_model()
 
     aliases = all_skill_aliases()
