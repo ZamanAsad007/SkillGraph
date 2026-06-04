@@ -1,5 +1,53 @@
-import { io } from "socket.io-client";
+import { useEffect, useRef } from "react";
+import { io, Socket } from "socket.io-client";
+import { api } from "../services/api";
 
 export function useSocket() {
-  return io(import.meta.env.VITE_SOCKET_URL ?? "http://localhost:3002", { autoConnect: false });
+  const socketRef = useRef<Socket | null>(null);
+
+  useEffect(() => {
+    const connectSocket = async () => {
+      if (socketRef.current) return;
+
+      try {
+        
+        const response = await api.get("/auth/socket-token");
+        const socketToken = response.data.data.token;
+
+        const socket = io(import.meta.env.VITE_SOCKET_URL ?? "http://localhost:3002", {
+          auth: {
+            token: socketToken
+          },
+          autoConnect: true
+        });
+
+        socket.on("connect", () => {
+          console.log("Socket.IO connected");
+        });
+
+        socket.on("connect_error", (error) => {
+          console.error("Socket.IO connection error:", error.message);
+        });
+
+        socket.on("disconnect", () => {
+          console.log("Socket.IO disconnected");
+        });
+
+        socketRef.current = socket;
+      } catch (error) {
+        console.error("Failed to connect socket:", error);
+      }
+    };
+
+    void connectSocket();
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, []);
+
+  return socketRef.current;
 }
