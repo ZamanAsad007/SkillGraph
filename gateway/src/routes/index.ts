@@ -14,9 +14,11 @@ import { resumeRouter } from "./resume.routes.js";
 import { careerFairRouter } from "./careerFair.routes.js";
 import { mentorshipRouter } from "./mentorship.routes.js";
 import { alumniVerificationRouter } from "./alumniVerification.routes.js";
-
+import { adminRouter } from "./admin.routes.js";
+import { checkMaintenanceMode } from "../middleware/maintenance.middleware.js";
 export const router = Router();
 
+router.use(checkMaintenanceMode)
 router.use("/auth", authRouter);
 router.use("/ingestion", ingestionRouter);
 router.use("/matchmaker", matchmakerRouter);
@@ -32,3 +34,4 @@ router.use("/mentors", mentorshipRouter);
 router.use("/", alumniVerificationRouter);
 router.use("/", roleManagementRouter);
 router.use("/", proxyRouter);
+router.use("/",adminRouter)
