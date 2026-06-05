@@ -11,6 +11,8 @@ import {
   Sparkles,
   Users,
 } from "lucide-react";
+import gsap from "gsap";
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
@@ -54,9 +56,44 @@ const authOptions = [
 ];
 
 export function Landing() {
+  const pageRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!pageRef.current) return;
+
+    const context = gsap.context(() => {
+      const timeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+      timeline
+        .from("[data-gsap='nav']", { y: -16, opacity: 0, duration: 0.5 })
+        .from("[data-gsap='hero-copy'] > *", { y: 28, opacity: 0, duration: 0.7, stagger: 0.08 }, "-=0.1")
+        .from("[data-gsap='hero-node']", { scale: 0.65, opacity: 0, duration: 0.55, stagger: 0.06 }, "-=0.45")
+        .from("[data-gsap='outcome']", { y: 18, opacity: 0, duration: 0.5, stagger: 0.05 }, "-=0.3")
+        .from("[data-gsap='section-item']", { y: 22, opacity: 0, duration: 0.55, stagger: 0.06 }, "-=0.1");
+
+      gsap.to("[data-gsap='hero-node']", {
+        y: -12,
+        duration: 2.8,
+        repeat: -1,
+        yoyo: true,
+        ease: "sine.inOut",
+        stagger: 0.18,
+      });
+
+      gsap.to("[data-gsap='radar']", {
+        rotate: 360,
+        duration: 22,
+        repeat: -1,
+        ease: "none",
+        transformOrigin: "50% 50%",
+      });
+    }, pageRef);
+
+    return () => context.revert();
+  }, []);
+
   return (
-    <main className="min-h-screen bg-[#f6f7f9] text-[#17202a]">
-      <nav className="fixed inset-x-0 top-0 z-50 border-b border-white/20 bg-[#07111f]/85 backdrop-blur-xl">
+    <main ref={pageRef} className="min-h-screen bg-[#f6f7f9] text-[#17202a]">
+      <nav data-gsap="nav" className="fixed inset-x-0 top-0 z-50 border-b border-white/20 bg-[#07111f]/85 backdrop-blur-xl">
         <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center justify-between px-5 sm:px-8">
           <Link to="/" className="flex items-center gap-2 text-sm font-semibold text-white">
             <span className="grid size-8 place-items-center rounded-lg bg-white text-[#07111f]">
@@ -85,7 +122,7 @@ export function Landing() {
         <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-[#f6f7f9] to-transparent" />
 
         <div className="relative mx-auto grid min-h-[calc(100vh-4rem)] w-full max-w-[1600px] items-center gap-10 px-5 py-12 sm:px-8 lg:grid-cols-[0.86fr_1.14fr]">
-          <div className="max-w-3xl">
+          <div data-gsap="hero-copy" className="max-w-3xl">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium text-white/75 backdrop-blur">
               <Sparkles className="size-3.5 text-[#8bb8ff]" />
               Career intelligence for project-based learning
@@ -126,6 +163,7 @@ export function Landing() {
 
             {networkNodes.map((node) => (
               <div
+                data-gsap="hero-node"
                 className={`absolute grid ${node.size} place-items-center rounded-2xl border text-sm font-semibold shadow-2xl ${node.tone}`}
                 key={node.label}
                 style={{ left: node.left, top: node.top }}
@@ -139,7 +177,7 @@ export function Landing() {
 
       <section id="platform" className="relative mx-auto -mt-16 grid w-full max-w-[1600px] gap-4 px-5 sm:px-8 lg:grid-cols-4">
         {outcomes.map(([title, body]) => (
-          <article className="rounded-lg border border-[#dfe3ea] bg-white p-5 shadow-sm" key={title}>
+          <article data-gsap="outcome" className="rounded-lg border border-[#dfe3ea] bg-white p-5 shadow-sm" key={title}>
             <p className="text-base font-semibold">{title}</p>
             <p className="mt-2 text-sm leading-6 text-[#626f86]">{body}</p>
           </article>
@@ -147,7 +185,7 @@ export function Landing() {
       </section>
 
       <section id="workflow" className="mx-auto grid w-full max-w-[1600px] gap-8 px-5 py-16 sm:px-8 lg:grid-cols-[0.8fr_1.2fr]">
-        <div>
+        <div data-gsap="section-item">
           <p className="text-sm font-semibold uppercase tracking-[0.12em] text-[#0c66e4]">Organized workflow</p>
           <h2 className="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">A cleaner path from signup to career signal.</h2>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-[#44546f]">
@@ -157,7 +195,7 @@ export function Landing() {
 
         <div className="grid gap-4 md:grid-cols-3">
           {steps.map(({ title, body, Icon }) => (
-            <article className="rounded-lg border border-[#dfe3ea] bg-white p-5 shadow-sm" key={title}>
+            <article data-gsap="section-item" className="rounded-lg border border-[#dfe3ea] bg-white p-5 shadow-sm" key={title}>
               <Icon className="size-6 text-[#0c66e4]" />
               <h3 className="mt-5 text-lg font-semibold">{title}</h3>
               <p className="mt-3 text-sm leading-6 text-[#626f86]">{body}</p>

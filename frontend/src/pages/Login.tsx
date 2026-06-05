@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { GitHubConnectButton } from "../components/auth/GitHubConnectButton";
 import { GoogleConnectButton } from "../components/auth/GoogleConnectButton";
-import { loginWithEmail, registerWithEmail, verifyEmail } from "../services/auth.service";
+import { getInvitationDetails, loginWithEmail, registerWithEmail, verifyEmail } from "../services/auth.service";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -23,18 +23,39 @@ export function Login() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState("student");
   const [verificationToken, setVerificationToken] = useState("");
   const [devVerificationToken, setDevVerificationToken] = useState<string>();
-  const [verificationEmailSent, setVerificationEmailSent] = useState<boolean>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const token = new URLSearchParams(location.search).get("token");
-    if (!token) return;
+  const [inviteToken, setInviteToken] = useState<string>("");
+  const [invitationDetails, setInvitationDetails] = useState<{
+    email: string;
+    role: string;
+    university: { name: string };
+  } | null>(null);
 
-    setVerificationToken(token);
-    setMode("verify");
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const token = params.get("invite");
+    if (token) {
+      setInviteToken(token);
+      setMode("signup");
+      setLoading(true);
+      getInvitationDetails(token)
+        .then((details) => {
+          setInvitationDetails(details);
+          setEmail(details.email);
+          setRole(details.role.toLowerCase());
+        })
+        .catch((err) => {
+          setError(authError(err));
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    }
   }, [location.search]);
 
   const title = useMemo(() => {
@@ -47,13 +68,18 @@ export function Login() {
     event.preventDefault();
     setError(undefined);
     setLoading(true);
-
+ 
     try {
       if (mode === "signup") {
-        const result = await registerWithEmail({ fullName, email, password });
+        const result = await registerWithEmail({ 
+          fullName, 
+          email, 
+          password, 
+          role, 
+          inviteToken: inviteToken || undefined 
+        });
         setDevVerificationToken(result.verificationToken);
-        setVerificationEmailSent(result.emailSent);
-        setVerificationToken("");
+        setVerificationToken(result.verificationToken ?? "");
         setMode("verify");
       } else if (mode === "verify") {
         await verifyEmail(verificationToken);
@@ -107,20 +133,18 @@ export function Login() {
           <h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
           <p className="mt-2 text-sm text-[#626f86]">
             {mode === "verify"
-              ? verificationEmailSent === false
-                ? "Email delivery is not configured for this environment."
-                : "Paste the confirmation token sent to your email."
+              ? "Paste the confirmation token sent to your email."
               : "Choose an OAuth provider or use email and password."}
           </p>
 
-          {mode !== "verify" && (
+          {mode !== "verify" && !invitationDetails && (
             <div className="mt-6 grid gap-2">
               <GoogleConnectButton />
               <GitHubConnectButton />
             </div>
           )}
 
-          {mode !== "verify" && (
+          {mode !== "verify" && !invitationDetails && (
             <div className="my-5 flex items-center gap-3 text-xs text-[#626f86]">
               <div className="h-px flex-1 bg-[#edf0f5]" />
               or
@@ -128,23 +152,47 @@ export function Login() {
             </div>
           )}
 
+          {mode === "signup" && invitationDetails && (
+            <div className="mt-5 mb-3 rounded-lg border border-[#cce0ff] bg-[#e9f2ff] p-3 text-xs text-[#0c66e4] flex gap-2 items-start">
+              <ShieldCheck className="size-4 text-[#0c66e4] shrink-0 mt-0.5" />
+              <div>
+                <strong>Invited Account</strong>: You are joining <strong>{invitationDetails.university?.name}</strong> as <strong>{invitationDetails.role}</strong>. Your role and email settings are managed by your administrator.
+              </div>
+            </div>
+          )}
+
           <form className="grid gap-3" onSubmit={handleSubmit}>
             {mode === "signup" && (
-              <label className="grid gap-1.5 text-sm font-medium">
-                Full name
-                <Input value={fullName} onChange={(event) => setFullName(event.target.value)} required />
-              </label>
+              <>
+                <label className="grid gap-1.5 text-sm font-medium">
+                  Full name
+                  <Input value={fullName} onChange={(event) => setFullName(event.target.value)} required />
+                </label>
+                <label className="grid gap-1.5 text-sm font-medium">
+                  Role
+                  <select
+                    value={role}
+                    onChange={(event) => setRole(event.target.value)}
+                    disabled={!!invitationDetails}
+                    className="h-9 rounded-md border border-[#cfd7e3] bg-white px-3 text-sm outline-none focus:border-[#0c66e4] focus:ring-1 focus:ring-[#0c66e4] disabled:bg-gray-100 disabled:text-gray-500"
+                  >
+                    <option value="student">Student</option>
+                    <option value="alumni">Alumni / Mentor</option>
+                    <option value="professor">Professor</option>
+                  </select>
+                </label>
+              </>
             )}
 
             {mode !== "verify" ? (
               <>
                 <label className="grid gap-1.5 text-sm font-medium">
                   Email
-                  <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                  <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} disabled={!!invitationDetails} required className="disabled:bg-gray-100 disabled:text-gray-500" />
                 </label>
                 <label className="grid gap-1.5 text-sm font-medium">
                   Password
-                  <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} />
+                  <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={mode === "signup" ? 8 : undefined} />
                 </label>
               </>
             ) : (
@@ -154,10 +202,9 @@ export function Login() {
               </label>
             )}
 
-            {mode === "verify" && devVerificationToken && (
-              <div className="rounded-lg border border-[#cce0ff] bg-[#e9f2ff] p-3 text-xs leading-5 text-[#0c66e4]">
-                SMTP is not configured locally. Use this development token to verify the account:
-                <span className="mt-1 block break-all font-mono">{devVerificationToken}</span>
+            {devVerificationToken && (
+              <div className="rounded-lg border border-[#cce0ff] bg-[#e9f2ff] p-3 text-xs text-[#0c66e4]">
+                Development verification token: <span className="font-mono">{devVerificationToken}</span>
               </div>
             )}
 
@@ -167,27 +214,18 @@ export function Login() {
               </div>
             )}
 
-            <Button disabled={loading} className="mt-2 bg-[#0c66e4] text-white hover:bg-[#0055cc]">
+            <Button type="submit" disabled={loading} className="mt-2 bg-[#0c66e4] text-white hover:bg-[#0055cc]">
               {loading ? "Please wait..." : mode === "signup" ? "Create account" : mode === "verify" ? "Confirm email" : "Log in"}
             </Button>
           </form>
 
           <div className="mt-5 text-center text-sm text-[#626f86]">
             {mode === "signup" ? (
-              <button className="font-medium text-[#0c66e4]" onClick={() => {
-                setDevVerificationToken(undefined);
-                setVerificationEmailSent(undefined);
-                setMode("login");
-              }}>
+              <button className="font-medium text-[#0c66e4] disabled:opacity-50" disabled={!!invitationDetails} onClick={() => setMode("login")}>
                 Already have an account? Log in
               </button>
             ) : (
-              <button className="font-medium text-[#0c66e4]" onClick={() => {
-                setDevVerificationToken(undefined);
-                setVerificationEmailSent(undefined);
-                setVerificationToken("");
-                setMode("signup");
-              }}>
+              <button className="font-medium text-[#0c66e4]" onClick={() => setMode("signup")}>
                 New here? Create an account
               </button>
             )}

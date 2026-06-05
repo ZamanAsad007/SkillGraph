@@ -61,14 +61,18 @@ export async function updateAcademicProfile(input: {
   return response.data.data;
 }
 
-export async function registerWithEmail(input: { fullName: string; email: string; password: string }): Promise<{
-  id: string;
-  email: string;
-  emailVerificationRequired: boolean;
-  emailSent: boolean;
-  verificationToken?: string;
-}> {
+export async function registerWithEmail(input: { fullName: string; email: string; password: string; role?: string; inviteToken?: string }) {
   const response = await api.post("/auth/register", input);
+  return response.data.data;
+}
+
+export async function getInvitationDetails(token: string): Promise<any> {
+  const response = await api.get(`/auth/invite/${token}`);
+  return response.data.data;
+}
+
+export async function updateUserRole(role: string): Promise<{ role: string }> {
+  const response = await api.patch("/auth/role", { role });
   return response.data.data;
 }
 

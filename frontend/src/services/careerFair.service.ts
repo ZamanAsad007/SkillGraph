@@ -85,5 +85,3 @@ export async function sendInterviewInvite(data: {
   const response = await api.post("/admin/career-fairs/invite", data);
   return response.data.data;
 }
-
-
