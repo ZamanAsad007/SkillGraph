@@ -23,7 +23,14 @@ import type { GalaxyNode } from "../services/graph.service";
 import { triggerIngestion, getIngestionStatus } from "../services/graph.service";
 import { getCurrentUser } from "../services/auth.service";
 import { useAuthStore } from "../store/auth.store";
+import { useNavigate } from "react-router-dom";
+import { AlumniDashboard } from "./AlumniDashboard";
 import { useGalaxy } from "../hooks/useGalaxy";
+import { getDecayedSkills, reactivateSkill, type DecayedSkill } from "../services/decay.service";
+import { getRoles } from "../services/careerGps.service";
+import { getResumePreviewUrl, downloadResumePdf, getResumePreviewHtml, analyzeResume } from "../services/resume.service";
+import { getResourcesForSkill, type LearningResource } from "../services/resources.service";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -83,7 +90,7 @@ function getConfidence(node: GalaxyNode) {
 }
 
 export function Dashboard() {
-  const { userId, fullName, publicHandle, setUser } = useAuthStore();
+  const { userId, fullName, publicHandle, academicProfile, setUser } = useAuthStore();
   const [selectedNode, setSelectedNode] = useState<GalaxyNode | null>(null);
   const [ingesting, setIngesting] = useState(false);
   const [ingestionStatus, setIngestionStatus] = useState<IngestionStatus | null>(null);
@@ -91,8 +98,187 @@ export function Dashboard() {
   const [now, setNow] = useState(() => Date.now());
   const [statusPollVersion, setStatusPollVersion] = useState(0);
   const [manualCooldownUntil, setManualCooldownUntil] = useState<string>();
-  const galaxy = useGalaxy({ studentId: userId });
-  const { nodes, links, error: galaxyError, refresh } = galaxy;
+  const [decayedSkills, setDecayedSkills] = useState<DecayedSkill[]>([]);
+  const [showResumeModal, setShowResumeModal] = useState(false);
+  const [resumeModalTab, setResumeModalTab] = useState<"export" | "ats">("export");
+  const [parsingPdf, setParsingPdf] = useState(false);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<{
+    id: string;
+    atsScore: number;
+    matchedSkills: string[];
+    gapSkills: string[];
+    roleTitle: string;
+  } | null>(null);
+  const [analyzingResume, setAnalyzingResume] = useState(false);
+  const [selectedGapSkill, setSelectedGapSkill] = useState<string | null>(null);
+  const [gapSkillResources, setGapSkillResources] = useState<LearningResource[]>([]);
+  const [loadingResources, setLoadingResources] = useState(false);
+
+  const [roles, setRoles] = useState<any[]>([]);
+  const [selectedRoleId, setSelectedRoleId] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [previewVersion, setPreviewVersion] = useState(0);
+
+  useEffect(() => {
+    if (!showResumeModal) return;
+
+    let active = true;
+    setLoadingPreview(true);
+
+    const loadPreview = async () => {
+      try {
+        const html = await getResumePreviewHtml(selectedRoleId || undefined);
+        if (active) {
+          setPreviewHtml(html);
+        }
+      } catch (err) {
+        console.error("Failed to load resume preview:", err);
+        if (active) {
+          setPreviewHtml("<p style='padding: 2rem; color: #ef4444; font-weight: 600; text-align: center;'>Failed to load preview. Please try logging in again.</p>");
+        }
+      } finally {
+        if (active) {
+          setLoadingPreview(false);
+        }
+      }
+    };
+
+    void loadPreview();
+
+    return () => {
+      active = false;
+    };
+  }, [showResumeModal, selectedRoleId, previewVersion]);
+
+  const fetchRoles = async () => {
+    try {
+      const data = await getRoles();
+      setRoles(data);
+    } catch (err) {
+      console.error("Failed to fetch roles:", err);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    setDownloading(true);
+    try {
+      await downloadResumePdf(
+        selectedRoleId || undefined,
+        `resume_${publicHandle || fullName || "export"}.pdf`
+      );
+    } catch (err) {
+      console.error("Failed to export resume PDF:", err);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const [extractedText, setExtractedText] = useState("");
+
+  const handleResumePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.type !== "application/pdf") {
+      alert("Please upload a valid PDF file.");
+      return;
+    }
+
+    setPdfFile(file);
+    setParsingPdf(true);
+    setAnalysisResult(null);
+    setSelectedGapSkill(null);
+    setGapSkillResources([]);
+
+    try {
+      const pdfjsUrl = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs";
+      const pdfjs: any = await import(/* @vite-ignore */ pdfjsUrl);
+      pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs";
+      
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
+      
+      let text = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(" ");
+        text += pageText + "\n";
+      }
+
+      if (!text.trim()) {
+        throw new Error("No readable text found in PDF. The PDF might contain scanned images without OCR.");
+      }
+
+      setExtractedText(text);
+
+      if (selectedRoleId) {
+        await runResumeAnalysis(text, selectedRoleId);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to parse PDF: " + (err.message || err));
+      setPdfFile(null);
+    } finally {
+      setParsingPdf(false);
+    }
+  };
+
+  const runResumeAnalysis = async (textToAnalyze: string, roleId: string) => {
+    if (!textToAnalyze || !roleId) return;
+    setAnalyzingResume(true);
+    try {
+      const result = await analyzeResume(textToAnalyze, roleId);
+      setAnalysisResult(result);
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to analyze resume: " + (err.response?.data?.error?.message || err.message || err));
+    } finally {
+      setAnalyzingResume(false);
+    }
+  };
+
+  const handleFetchResources = async (skillName: string) => {
+    setSelectedGapSkill(skillName);
+    setLoadingResources(true);
+    try {
+      const res = await getResourcesForSkill(skillName);
+      setGapSkillResources(res);
+    } catch (err) {
+      console.error("Failed to load skill resources:", err);
+    } finally {
+      setLoadingResources(false);
+    }
+  };
+
+
+  const fetchDecayed = async () => {
+    try {
+      const list = await getDecayedSkills();
+      setDecayedSkills(list);
+    } catch (err) {
+      console.error("Failed to fetch decayed skills:", err);
+    }
+  };
+
+  const handleReactivate = async (skillName: string) => {
+    try {
+      await reactivateSkill(skillName);
+      await refresh();
+      await fetchDecayed();
+    } catch (err) {
+      console.error(`Failed to reactivate ${skillName}:`, err);
+    }
+  };
+
+  const navigate = useNavigate();
+  const galaxy = useGalaxy({ studentId: academicProfile ? userId : undefined });
+  const { nodes, links, loading: loadingGalaxy, error: galaxyError, refresh } = galaxy;
   const skillNodes = useMemo(() => nodes.filter(isSkillNode), [nodes]);
   const activeSkills = skillNodes.filter((node) => node.name && !node.dormant).length;
   const dormantSkills = skillNodes.filter((node) => node.dormant).length;
@@ -177,7 +363,25 @@ export function Dashboard() {
   }, [setUser]);
 
   useEffect(() => {
-    if (!userId) return;
+    if (userId && !academicProfile) {
+      navigate("/admin");
+    }
+  }, [userId, academicProfile, navigate]);
+
+  useEffect(() => {
+    if (userId && academicProfile && !loadingGalaxy && nodes.length === 0 && !galaxyError) {
+      navigate("/onboarding");
+    }
+  }, [userId, academicProfile, loadingGalaxy, nodes.length, galaxyError, navigate]);
+
+  useEffect(() => {
+    if (userId && academicProfile) {
+      void fetchDecayed();
+    }
+  }, [userId, academicProfile]);
+
+  useEffect(() => {
+    if (!userId || !academicProfile) return;
 
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -290,6 +494,10 @@ export function Dashboard() {
     }
   }
 
+  if (!academicProfile) {
+    return <AlumniDashboard />;
+  }
+
   return (
     <div className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-[1720px] flex-col gap-4 pb-20 lg:pb-4">
       <header className="flex flex-col gap-3 rounded-lg border border-[#dfe3ea] bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
@@ -317,6 +525,19 @@ export function Dashboard() {
               className="h-9 border-[#cfd7e3] bg-[#f7f8fa] pl-8"
             />
           </div>
+
+          <Button
+            onClick={() => {
+              void fetchRoles();
+              setShowResumeModal(true);
+            }}
+            variant="outline"
+            size="lg"
+            className="gap-2 border-[#cfd7e3] text-[#17202a] hover:bg-[#f7f8fa]"
+          >
+            <Sparkles className="size-4 text-[#0c66e4]" />
+            AI Resume Exporter
+          </Button>
 
           <Button
             onClick={handleIngest}
@@ -348,12 +569,44 @@ export function Dashboard() {
         />
       )}
 
+      {decayedSkills.length > 0 && (
+        <div className="flex flex-col gap-3 rounded-lg border border-[#ffe1cc] bg-[#fffcf5] p-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 size-5 text-[#d97706]" />
+            <div>
+              <h2 className="text-sm font-semibold text-[#b45309]">
+                Decayed Skills Detected
+              </h2>
+              <p className="mt-1 text-sm text-[#d97706]">
+                You have {decayedSkills.length} skills that haven't registered commit activity in the past 12 months. Their proficiency has decayed by 15%, and they are marked as dormant.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {decayedSkills.map((ds) => (
+              <div
+                key={ds.id}
+                className="flex items-center gap-2 rounded-md border border-[#ffe1cc] bg-white px-3 py-1.5 shadow-sm text-xs font-medium text-[#17202a]"
+              >
+                <span>{ds.skillName} ({(ds.currentWeight * 100).toFixed(0)}%)</span>
+                <button
+                  onClick={() => handleReactivate(ds.skillName)}
+                  className="rounded bg-[#ffebe6] px-1.5 py-0.5 text-[10px] font-semibold text-[#ae2a19] hover:bg-[#ffd2cc] transition-colors"
+                >
+                  Reactivate
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <section className="grid gap-3 md:grid-cols-3">
         <Card className="rounded-lg border-[#dfe3ea] bg-white py-3 shadow-sm">
           <CardContent className="flex items-center justify-between px-4">
             <div>
               <p className="text-xs font-medium text-[#626f86]">Skills mapped</p>
-              <p className="mt-1 text-2xl font-semibold text-[#17202a]">{skillNodes.length}</p>
+              <p className="mt-1 text-2xl font-semibold text-[#17202a]">{nodes.length}</p>
             </div>
             <div className="grid size-9 place-items-center rounded-lg bg-[#e9f2ff] text-[#0c66e4]">
               <GitBranch className="size-4" />
@@ -575,6 +828,335 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </section>
+
+      {showResumeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="flex h-full max-h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-[#dfe3ea] bg-white shadow-2xl overflow-hidden">
+            {/* Modal Header & Tabs */}
+            <div className="border-b border-[#edf0f5] bg-white">
+              <div className="flex items-center justify-between px-6 pt-4 pb-2">
+                <div>
+                  <h3 className="text-lg font-bold text-[#17202a]">AI Resume Assistant</h3>
+                  <p className="text-xs text-[#626f86]">Export your resume or test it against an ATS screener.</p>
+                </div>
+                <button
+                  onClick={() => setShowResumeModal(false)}
+                  className="rounded-lg p-1 text-[#626f86] hover:bg-[#edf0f5] hover:text-[#17202a]"
+                >
+                  <span className="sr-only">Close</span>
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="flex gap-4 px-6 border-t border-[#edf0f5]/80">
+                <button
+                  onClick={() => setResumeModalTab("export")}
+                  className={`border-b-2 py-3 text-sm font-semibold transition-colors ${
+                    resumeModalTab === "export"
+                      ? "border-[#0c66e4] text-[#0c66e4]"
+                      : "border-transparent text-[#626f86] hover:text-[#17202a]"
+                  }`}
+                >
+                  AI Resume Exporter
+                </button>
+                <button
+                  onClick={() => setResumeModalTab("ats")}
+                  className={`border-b-2 py-3 text-sm font-semibold transition-colors ${
+                    resumeModalTab === "ats"
+                      ? "border-[#0c66e4] text-[#0c66e4]"
+                      : "border-transparent text-[#626f86] hover:text-[#17202a]"
+                  }`}
+                >
+                  ATS Upload & Analyzer
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            {resumeModalTab === "export" ? (
+              <div className="flex flex-1 flex-col gap-4 overflow-hidden p-6 md:flex-row">
+                {/* Left Side: Controls */}
+                <div className="flex w-full flex-col gap-4 md:w-80">
+                  <div>
+                    <label className="text-xs font-semibold uppercase tracking-wider text-[#626f86]">Select Target Role</label>
+                    <select
+                      value={selectedRoleId}
+                      onChange={(e) => setSelectedRoleId(e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-[#cfd7e3] bg-white px-3 py-2 text-sm text-[#17202a] shadow-sm outline-none focus:border-[#0c66e4]"
+                    >
+                      <option value="">General (No target role optimization)</option>
+                      {roles.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="rounded-lg border border-[#e9f2ff] bg-[#f3f8ff] p-4 text-xs text-[#0c66e4]">
+                    <p className="font-semibold">How it works:</p>
+                    <ul className="mt-2 list-disc space-y-1.5 pl-4">
+                      <li>Fetches your technical skills, active confidence weights, and project portfolio.</li>
+                      <li>Calculates a real-time weighted ATS match score for the selected industry role.</li>
+                      <li>Re-orders technical skills to prioritize required keywords first, boosting parser match rates.</li>
+                      <li>Generates a clean, single-column, standard A4 PDF formatted for compliance with major ATS screeners.</li>
+                    </ul>
+                  </div>
+
+                  <div className="mt-auto pt-4 border-t border-[#edf0f5]">
+                    <Button
+                      onClick={handleExportPdf}
+                      disabled={downloading}
+                      className="w-full gap-2 bg-[#0c66e4] text-white hover:bg-[#0055cc]"
+                    >
+                      {downloading ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                          Generating PDF...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4" />
+                          Export PDF Resume
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Right Side: Live HTML Preview */}
+                <div className="flex flex-1 flex-col rounded-lg border border-[#dfe3ea] bg-[#f7f8fa] overflow-hidden">
+                  <div className="bg-white px-4 py-2 border-b border-[#edf0f5] text-xs font-medium text-[#626f86] flex justify-between items-center">
+                    <span>Live Document Preview (A4)</span>
+                    <button
+                      onClick={() => setPreviewVersion((v) => v + 1)}
+                      className="hover:text-[#0c66e4]"
+                      title="Refresh Preview"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                    </button>
+                  </div>
+                  {loadingPreview ? (
+                    <div className="flex flex-1 flex-col items-center justify-center bg-white gap-2 text-[#626f86] text-xs">
+                      <RefreshCw className="h-4 w-4 animate-spin text-[#0c66e4]" />
+                      <span>Loading live preview...</span>
+                    </div>
+                  ) : (
+                    <iframe
+                      id="resume-preview-iframe"
+                      srcDoc={previewHtml}
+                      className="w-full flex-1 border-0 bg-white"
+                    />
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4 p-6 overflow-y-auto flex-1">
+                <div className="grid gap-6 md:grid-cols-[1fr_320px] h-full overflow-hidden">
+                  {/* Left side: Upload & Score Results */}
+                  <div className="flex flex-col gap-4 overflow-y-auto pr-2">
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[#626f86]">1. Select Target Role</label>
+                      <select
+                        value={selectedRoleId}
+                        onChange={(e) => {
+                          setSelectedRoleId(e.target.value);
+                          if (extractedText && e.target.value) {
+                            void runResumeAnalysis(extractedText, e.target.value);
+                          }
+                        }}
+                        className="w-full rounded-lg border border-[#cfd7e3] bg-white px-3 py-2 text-sm text-[#17202a] shadow-sm outline-none focus:border-[#0c66e4]"
+                      >
+                        <option value="">-- Choose Target Role --</option>
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-[#626f86]">2. Upload Current Resume (PDF)</label>
+                      <div className="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#cfd7e3] bg-[#f7f8fa] p-6 text-center transition-all hover:bg-white hover:border-[#0c66e4]">
+                        <input
+                          type="file"
+                          accept=".pdf"
+                          onChange={handleResumePdfUpload}
+                          disabled={parsingPdf || analyzingResume}
+                          className="absolute inset-0 cursor-pointer opacity-0"
+                        />
+                        {parsingPdf ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <RefreshCw className="size-8 animate-spin text-[#0c66e4]" />
+                            <p className="text-sm font-semibold text-[#17202a]">Parsing resume PDF contents...</p>
+                          </div>
+                        ) : pdfFile ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <CheckCircle2 className="size-8 text-[#1f845a]" />
+                            <p className="text-sm font-semibold text-[#17202a]">{pdfFile.name}</p>
+                            <p className="text-xs text-[#626f86]">{(pdfFile.size / 1024).toFixed(1)} KB • Click or drag to replace</p>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-2">
+                            <svg className="size-8 text-[#626f86]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                            <p className="text-sm font-semibold text-[#17202a]">Upload resume PDF</p>
+                            <p className="text-xs text-[#626f86]">Drag & drop or browse files</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {analyzingResume && (
+                      <div className="flex items-center justify-center gap-2 py-8">
+                        <RefreshCw className="size-5 animate-spin text-[#0c66e4]" />
+                        <span className="text-sm font-medium text-[#17202a]">Analyzing resume keywords...</span>
+                      </div>
+                    )}
+
+                    {analysisResult && (
+                      <div className="flex flex-col gap-4 rounded-xl border border-[#dfe3ea] bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between border-b border-[#edf0f5] pb-3">
+                          <div>
+                            <h4 className="text-sm font-bold text-[#17202a]">Analysis Results</h4>
+                            <p className="text-xs text-[#626f86]">Matched against <strong className="text-[#17202a]">{analysisResult.roleTitle}</strong></p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-right">
+                              <span className="text-[10px] font-semibold text-[#626f86]">ATS Match Score</span>
+                              <div className="text-xl font-black text-[#0c66e4]">{analysisResult.atsScore}%</div>
+                            </div>
+                            <div className="relative h-10 w-10 flex-shrink-0">
+                              <svg className="h-full w-full -rotate-90" viewBox="0 0 36 36">
+                                <path
+                                  className="text-[#edf0f5]"
+                                  strokeWidth="4"
+                                  stroke="currentColor"
+                                  fill="none"
+                                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                />
+                                <path
+                                  className="text-[#0c66e4]"
+                                  strokeDasharray={`${analysisResult.atsScore}, 100`}
+                                  strokeWidth="4"
+                                  strokeLinecap="round"
+                                  stroke="currentColor"
+                                  fill="none"
+                                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                />
+                              </svg>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                          <h5 className="text-[10px] font-bold uppercase tracking-wider text-[#626f86]">Matched Keywords ({analysisResult.matchedSkills.length})</h5>
+                          {analysisResult.matchedSkills.length === 0 ? (
+                            <p className="text-xs text-[#626f86] italic">No keywords matched yet.</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {analysisResult.matchedSkills.map((s) => (
+                                <span key={s} className="rounded bg-[#e7f8ef] px-2 py-0.5 text-xs font-medium text-[#1f845a]">
+                                  ✓ {s}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                          <h5 className="text-[10px] font-bold uppercase tracking-wider text-[#626f86]">Missing Gap Keywords ({analysisResult.gapSkills.length})</h5>
+                          {analysisResult.gapSkills.length === 0 ? (
+                            <p className="text-xs text-[#1f845a] font-semibold">Perfect! No gaps identified.</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {analysisResult.gapSkills.map((s) => (
+                                <button
+                                  key={s}
+                                  onClick={() => handleFetchResources(s)}
+                                  className={`rounded px-2 py-0.5 text-xs font-medium transition-all ${
+                                    selectedGapSkill === s
+                                      ? "bg-[#ae2a19] text-white"
+                                      : "bg-[#ffebe6] text-[#ae2a19] hover:bg-[#ffd2cc]"
+                                  }`}
+                                >
+                                  + {s}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right side: Learning Recommendations */}
+                  <div className="rounded-xl border border-[#dfe3ea] bg-[#f7f8fa] p-4 flex flex-col overflow-hidden max-h-[380px]">
+                    <h4 className="text-xs font-bold text-[#17202a] flex items-center gap-1.5 border-b border-[#dfe3ea] pb-2">
+                      <Sparkles className="size-3.5 text-[#0c66e4]" />
+                      Recapture Recommendations
+                    </h4>
+                    <div className="flex-1 overflow-y-auto mt-2">
+                      {selectedGapSkill ? (
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-semibold text-[#626f86]">Resources for:</span>
+                            <span className="rounded bg-[#ffebe6] px-1.5 py-0.5 text-[10px] font-bold text-[#ae2a19]">{selectedGapSkill}</span>
+                          </div>
+                          {loadingResources ? (
+                            <div className="flex flex-col items-center justify-center gap-1.5 py-8 text-[#626f86]">
+                              <RefreshCw className="size-3.5 animate-spin text-[#0c66e4]" />
+                              <span className="text-[10px]">Loading suggestions...</span>
+                            </div>
+                          ) : gapSkillResources.length === 0 ? (
+                            <div className="text-center py-8 text-[10px] text-[#626f86] italic bg-white rounded-lg border border-[#dfe3ea]">
+                              No direct online resources configured.
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {gapSkillResources.map((res) => (
+                                <a
+                                  key={res.id}
+                                  href={res.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block p-2 rounded-lg border border-[#dfe3ea] bg-white hover:border-[#0c66e4] transition-colors"
+                                >
+                                  <div className="flex items-start justify-between gap-1">
+                                    <span className="text-xs font-bold text-[#17202a] line-clamp-1">{res.title}</span>
+                                    {res.isUniversityApproved && (
+                                      <span className="rounded bg-[#e9f2ff] px-1 py-0.5 text-[8px] font-bold text-[#0c66e4] flex-shrink-0">
+                                        Approved
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="mt-1 flex items-center justify-between text-[8px] text-[#626f86]">
+                                    <span>{res.provider || "Self-Study"}</span>
+                                    {res.rating && <span>★ {res.rating.toFixed(1)}</span>}
+                                  </div>
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-center p-4 text-[#626f86]">
+                          <Target className="size-6 text-[#dfe3ea] mb-1.5" />
+                          <p className="text-[10px] leading-relaxed">Select a missing gap keyword to view course recommendations.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
