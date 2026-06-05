@@ -1,41 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { getPublicGalaxy, getStudentGalaxy, type GalaxyData, type GalaxyNode } from "../services/graph.service";
+import { GalaxyData, getPublicGalaxy, getStudentGalaxy } from "../services/graph.service";
 
-export function useGalaxy(options?: { studentId?: string; handle?: string }) {
+export function useGalaxy(target: { studentId?: string; handle?: string }) {
   const [data, setData] = useState<GalaxyData>({ nodes: [], links: [] });
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(target.studentId || target.handle));
+  const [error, setError] = useState<string>();
 
   const refresh = useCallback(async () => {
-    const studentId = options?.studentId;
-    const handle = options?.handle;
-
-    if (!studentId && !handle) {
-      setData({ nodes: [], links: [] });
-      setError(null);
-      return;
-    }
-
+    if (!target.studentId && !target.handle) return;
     setLoading(true);
-    setError(null);
-
+    setError(undefined);
     try {
-      const galaxy = handle ? await getPublicGalaxy(handle) : await getStudentGalaxy(studentId!);
-      setData({
-        nodes: galaxy.nodes ?? [],
-        links: galaxy.links ?? []
-      });
-    } catch (fetchError) {
-      setData({ nodes: [], links: [] });
-      setError(fetchError instanceof Error ? fetchError.message : "Failed to load skill galaxy");
+      const galaxy = target.handle ? await getPublicGalaxy(target.handle) : await getStudentGalaxy(target.studentId!);
+      setData(galaxy);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load galaxy");
     } finally {
       setLoading(false);
     }
-  }, [options?.handle, options?.studentId]);
+  }, [target.handle, target.studentId]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  return { nodes: data.nodes as GalaxyNode[], links: data.links, error, loading, refresh };
+  return { ...data, loading, error, refresh };
 }
