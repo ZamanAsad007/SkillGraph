@@ -21,7 +21,9 @@ import {
   createSkill,
   updateSkill,
   deleteSkill,
-  exportAuditLogsCsv
+  exportAuditLogsCsv,
+  extractSyllabusSkills,
+  listAlumni
 } from "../controllers/admin.controller.js";
 
 export const adminRouter = Router();
@@ -160,4 +162,18 @@ adminRouter.get(
   requireAuth,
   requireRole(["admin"]),
   asyncHandler(exportAuditLogsCsv)
+);
+
+adminRouter.post(
+  "/professor/courses/extract-skills",
+  requireAuth,
+  requireRole(["admin", "professor"]),
+  asyncHandler(extractSyllabusSkills)
+);
+
+adminRouter.get(
+  "/professor/alumni",
+  requireAuth,
+  requireRole(["admin", "professor"]),
+  asyncHandler(listAlumni)
 );

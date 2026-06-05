@@ -492,3 +492,57 @@ export async function exportAuditLogsCsv(req: Request, res: Response) {
     fail(res, "DB_ERROR", error.message, 500);
   }
 }
+
+export async function extractSyllabusSkills(req: Request, res: Response) {
+  try {
+    const { text } = req.body as { text?: string };
+    if (!text) {
+      fail(res, "INVALID_BODY", "Text is required", 400);
+      return;
+    }
+    
+    const nlpUrl = process.env.NLP_SERVICE_URL || "http://nlp-service:8001";
+    const response = await fetch(`${nlpUrl}/api/v1/nlp/extract/text`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      fail(res, "NLP_SERVICE_ERROR", `NLP extraction request failed: ${errorText}`, 502);
+      return;
+    }
+    
+    const data = (await response.json()) as { success: boolean; data: any[] };
+    ok(res, data.data);
+  } catch (error: any) {
+    fail(res, "API_ERROR", error.message, 500);
+  }
+}
+
+export async function listAlumni(req: Request, res: Response) {
+  try {
+    const alumni = await prisma.alumniProfile.findMany({
+      where: { verified: true },
+      include: { user: true },
+      orderBy: { createdAt: "desc" }
+    });
+    
+    const data = alumni.map((al) => ({
+      id: al.id,
+      userId: al.userId,
+      name: al.user.fullName,
+      email: al.user.email,
+      githubHandle: al.user.githubHandle,
+      currentCompany: al.currentCompany,
+      currentRole: al.currentRole,
+      graduationYear: al.graduationYear,
+      mentoringSkills: al.mentoringSkills || []
+    }));
+    
+    ok(res, data);
+  } catch (error: any) {
+    fail(res, "DB_ERROR", error.message, 500);
+  }
+}
