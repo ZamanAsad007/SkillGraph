@@ -1,51 +1,73 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { getCareerGPS, saveCareerGPS, type CareerGPSData } from "../services/careerGps.service";
 
-export function useCareerGPS(options?: { studentId: string | null; targetRoleId: string | null }) {
+interface UseCareerGPSProps {
+  studentId: string | null;
+  targetRoleId: string | null;
+}
+
+export function useCareerGPS({ studentId, targetRoleId }: UseCareerGPSProps) {
   const [data, setData] = useState<CareerGPSData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    const studentId = options?.studentId;
-    const targetRoleId = options?.targetRoleId;
-
+  useEffect(() => {
     if (!studentId || !targetRoleId) {
       setData(null);
       setError(null);
-      setLoading(false);
       return;
     }
 
-    setLoading(true);
-    setError(null);
+    let cancelled = false;
 
-    try {
-      setData(await getCareerGPS(studentId, targetRoleId));
-    } catch (fetchError) {
-      setData(null);
-      setError(fetchError instanceof Error ? fetchError.message : "Failed to generate Career GPS");
-    } finally {
-      setLoading(false);
-    }
-  }, [options?.studentId, options?.targetRoleId]);
+    const fetchGPS = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const gpsData = await getCareerGPS(studentId, targetRoleId);
+        if (!cancelled) {
+          setData(gpsData);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load career GPS");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void fetchGPS();
 
-  const save = useCallback(async () => {
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId, targetRoleId]);
+
+  const save = async () => {
     if (!data) return;
 
-    await saveCareerGPS({
-      studentId: data.studentId,
-      targetRoleId: data.targetRole.id,
-      completionPercentage: data.completionPercentage,
-      estimatedWeeks: data.estimatedWeeks,
-      missingSkills: data.missingSkills,
-      roadmap: data.roadmap
-    });
-  }, [data]);
+    try {
+      await saveCareerGPS({
+        studentId: data.studentId,
+        targetRoleId: data.targetRole.id,
+        completionPercentage: data.completionPercentage,
+        estimatedWeeks: data.estimatedWeeks,
+        missingSkills: data.missingSkills,
+        roadmap: data.roadmap
+      });
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : "Failed to save career GPS");
+    }
+  };
 
-  return { data, loading, error, refresh, save };
+  return {
+    data,
+    loading,
+    error,
+    save
+  };
 }
