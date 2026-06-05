@@ -59,13 +59,15 @@ export async function saveSimulation(req: Request, res: Response) {
 }
 
 export async function getSimulations(req: Request, res: Response) {
+  if (!req.user) {
+    fail(res, "UNAUTHORIZED", "Missing authenticated user", 401);
+    return;
+  }
+
   let targetStudentId = req.params.studentId;
+  let studentProfileId = "";
 
   if (targetStudentId === "me") {
-    if (!req.user) {
-      fail(res, "UNAUTHORIZED", "Missing authenticated user", 401);
-      return;
-    }
     const student = await prisma.studentProfile.findUnique({
       where: { userId: req.user.id }
     });
@@ -73,7 +75,7 @@ export async function getSimulations(req: Request, res: Response) {
       fail(res, "STUDENT_NOT_FOUND", "Student profile not found", 404);
       return;
     }
-    targetStudentId = student.id;
+    studentProfileId = student.id;
   } else {
     const student = await prisma.studentProfile.findFirst({
       where: { OR: [{ id: targetStudentId }, { userId: targetStudentId }] }
@@ -82,12 +84,26 @@ export async function getSimulations(req: Request, res: Response) {
       fail(res, "STUDENT_NOT_FOUND", "Student profile not found", 404);
       return;
     }
-    targetStudentId = student.id;
+
+    // Role-based access control check
+    // 1. Students can only query their own simulations
+    if (req.user.role === "student" && req.user.id !== student.userId) {
+      fail(res, "FORBIDDEN", "You do not have permission to view other students' simulations", 403);
+      return;
+    }
+
+    // 2. Professors / University Admins must be in the same university
+    if (req.user.universityId && student.universityId !== req.user.universityId) {
+      fail(res, "FORBIDDEN", "You do not have permission to view this student's simulations", 403);
+      return;
+    }
+
+    studentProfileId = student.id;
   }
 
   try {
     const paths = await prisma.simulatedPath.findMany({
-      where: { studentId: targetStudentId },
+      where: { studentId: studentProfileId },
       include: { targetRole: true },
       orderBy: { createdAt: "desc" }
     });
@@ -109,7 +125,8 @@ export async function deleteSimulation(req: Request, res: Response) {
 
   try {
     const simulation = await prisma.simulatedPath.findUnique({
-      where: { id }
+      where: { id },
+      include: { student: true }
     });
 
     if (!simulation) {
@@ -117,12 +134,21 @@ export async function deleteSimulation(req: Request, res: Response) {
       return;
     }
 
-    const student = await prisma.studentProfile.findUnique({
-      where: { userId: req.user.id }
-    });
-
-    // Allow deleting if it's the student's own simulation or if the user is admin/professor
-    if (req.user.role !== "admin" && req.user.role !== "professor" && (!student || simulation.studentId !== student.id)) {
+    // Role-based access control check for deletion
+    if (req.user.role === "student") {
+      const student = await prisma.studentProfile.findUnique({
+        where: { userId: req.user.id }
+      });
+      if (!student || simulation.studentId !== student.id) {
+        fail(res, "FORBIDDEN", "You do not have permission to delete this simulation", 403);
+        return;
+      }
+    } else if (req.user.role === "professor" || req.user.role === "admin") {
+      if (req.user.universityId && simulation.student?.universityId !== req.user.universityId) {
+        fail(res, "FORBIDDEN", "You do not have permission to delete this simulation", 403);
+        return;
+      }
+    } else {
       fail(res, "FORBIDDEN", "You do not have permission to delete this simulation", 403);
       return;
     }

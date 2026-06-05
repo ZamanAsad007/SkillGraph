@@ -14,7 +14,8 @@ import {
   registerWithEmail,
   updateAcademicProfile,
   updateUserRole,
-  verifyEmail
+  verifyEmail,
+  getInvitationDetails
 } from "../controllers/auth.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -36,5 +37,6 @@ authRouter.post("/departments", requireAuth, asyncHandler(createDepartment));
 authRouter.patch("/academic-profile", requireAuth, asyncHandler(updateAcademicProfile));
 authRouter.patch("/role", requireAuth, asyncHandler(updateUserRole));
 authRouter.get("/socket-token", requireAuth, getSocketToken);
+authRouter.get("/invite/:token", asyncHandler(getInvitationDetails));
 authRouter.post("/refresh", requireAuth, (_req, res) => res.json({ success: true, data: null }));
 authRouter.post("/logout", requireAuth, logout);

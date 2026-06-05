@@ -23,55 +23,22 @@ const updateSchema = z.object({
   })).default([])
 });
 
-function toNumber(value: unknown, fallback = 0) {
-  if (typeof value === "number") return value;
-  if (typeof value === "bigint") return Number(value);
-  if (value && typeof value === "object" && "toNumber" in value && typeof value.toNumber === "function") {
-    return value.toNumber();
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function normalizeNeo4jValue(value: unknown) {
-  if (typeof value === "bigint") return Number(value);
-  if (value && typeof value === "object" && "toNumber" in value && typeof value.toNumber === "function") {
-    return value.toNumber();
-  }
-  return value;
-}
-
 function toGalaxy(records: Array<{ node: { properties: Record<string, unknown> }; rel?: { type: string; properties: Record<string, unknown> }; target?: { properties: Record<string, unknown> } }>) {
   const nodes = new Map<string, Record<string, unknown>>();
   const links: Array<Record<string, unknown>> = [];
-  const normalizeProperties = (properties: Record<string, unknown>) => (
-    Object.fromEntries(
-      Object.entries(properties).map(([key, value]) => [
-        key,
-        normalizeNeo4jValue(value)
-      ])
-    )
-  );
 
   for (const record of records) {
-    const source = normalizeProperties(record.node.properties);
+    const source = record.node.properties;
     const sourceLabels = "labels" in record.node ? (record.node as unknown as { labels?: string[] }).labels : [];
     const sourceId = String(source.id ?? source.name);
     nodes.set(sourceId, { id: sourceId, labels: sourceLabels, ...source });
 
     if (record.target && record.rel) {
-      const target = normalizeProperties(record.target.properties);
-      const rel = normalizeProperties(record.rel.properties);
+      const target = record.target.properties;
       const targetLabels = "labels" in record.target ? (record.target as unknown as { labels?: string[] }).labels : [];
       const targetId = String(target.id ?? target.name);
-      const targetNode = {
-        id: targetId,
-        labels: targetLabels,
-        ...target,
-        ...(record.rel.type === "KNOWS" ? rel : {})
-      };
-      nodes.set(targetId, { ...nodes.get(targetId), ...targetNode });
-      links.push({ source: sourceId, target: targetId, type: record.rel.type, ...rel });
+      nodes.set(targetId, { id: targetId, labels: targetLabels, ...target });
+      links.push({ source: sourceId, target: targetId, type: record.rel.type, ...record.rel.properties });
     }
   }
 
@@ -120,7 +87,7 @@ graphRouter.post("/update", async (req, res, next) => {
 graphRouter.post("/endorsements", async (req, res, next) => {
   try {
     const payload = z.object({ studentId: z.string(), skillName: z.string() }).parse(req.body);
-
+    
     // Increment endorsementCount
     const result = await runWrite<{ count: number }>(
       `
@@ -170,14 +137,14 @@ graphRouter.post("/endorsements/mark-endorsed", async (req, res, next) => {
 graphRouter.post("/endorsements/decrement", async (req, res, next) => {
   try {
     const payload = z.object({ studentId: z.string(), skillName: z.string() }).parse(req.body);
-
+    
     // Decrement endorsementCount
     const result = await runWrite<{ count: number }>(
       `
       MATCH (student:Student {id: $studentId})-[knows:KNOWS]->(skill:Skill {name: $skillName})
-      SET knows.endorsementCount = CASE
-        WHEN knows.endorsementCount > 0 THEN knows.endorsementCount - 1
-        ELSE 0
+      SET knows.endorsementCount = CASE 
+        WHEN knows.endorsementCount > 0 THEN knows.endorsementCount - 1 
+        ELSE 0 
       END
       RETURN knows.endorsementCount AS count
       `,
@@ -393,22 +360,11 @@ graphRouter.post("/matchmaker/candidates", async (req, res, next) => {
         if (payload.scope === "same_department" && !sameDepartment) return null;
         if (payload.scope === "same_university" && !sameUniversity) return null;
 
-        const matchCount = toNumber(signal.matchCount);
-        const avgConfidence = toNumber(signal.avgConfidence, 0.5);
-        const endorsementCount = toNumber(signal.endorsementCount);
-        const repoSignalCount = toNumber(signal.repoSignalCount);
-        const matchedSkills = signal.matchedSkills.map((skill) => ({
-          ...skill,
-          confidence: toNumber(skill.confidence, 0.5),
-          proficiency: toNumber(skill.proficiency, 0.5),
-          endorsementCount: toNumber(skill.endorsementCount),
-          sourceRepos: Array.isArray(skill.sourceRepos) ? skill.sourceRepos : []
-        }));
-        const skillCoverage = matchCount / normalizedRequiredSkills.length;
-        const confidenceScore = Math.min(1, avgConfidence);
-        const endorsementScore = Math.min(1, endorsementCount / Math.max(1, normalizedRequiredSkills.length * 2));
+        const skillCoverage = signal.matchCount / normalizedRequiredSkills.length;
+        const confidenceScore = Math.min(1, signal.avgConfidence);
+        const endorsementScore = Math.min(1, signal.endorsementCount / Math.max(1, normalizedRequiredSkills.length * 2));
         const institutionScore = sameDepartment ? 1 : sameUniversity ? 0.75 : 0.35;
-        const activityScore = Math.min(1, repoSignalCount / Math.max(1, matchCount * 2));
+        const activityScore = Math.min(1, signal.repoSignalCount / Math.max(1, signal.matchCount * 2));
         const matchScore = Math.round((
           skillCoverage * 0.4 +
           confidenceScore * 0.2 +
@@ -416,15 +372,15 @@ graphRouter.post("/matchmaker/candidates", async (req, res, next) => {
           institutionScore * 0.15 +
           activityScore * 0.1
         ) * 100);
-        const matchedSkillNames = matchedSkills.map((skill) => skill.name);
+        const matchedSkillNames = signal.matchedSkills.map((skill) => skill.name);
         const missingSkills = payload.requiredSkills.filter((skill) => (
           !matchedSkillNames.some((matchedSkill) => matchedSkill.toLowerCase() === skill.toLowerCase())
         ));
         const reasons = [
-          `${matchCount} of ${normalizedRequiredSkills.length} required skills matched`,
+          `${signal.matchCount} of ${normalizedRequiredSkills.length} required skills matched`,
           sameDepartment ? "same department" : sameUniversity ? "same university" : "cross-university candidate",
-          repoSignalCount > 0 ? `${repoSignalCount} repository evidence signals` : "limited repository evidence",
-          endorsementCount > 0 ? `${endorsementCount} peer endorsements` : "no peer endorsements yet"
+          signal.repoSignalCount > 0 ? `${signal.repoSignalCount} repository evidence signals` : "limited repository evidence",
+          signal.endorsementCount > 0 ? `${signal.endorsementCount} peer endorsements` : "no peer endorsements yet"
         ];
 
         return {
@@ -438,12 +394,12 @@ graphRouter.post("/matchmaker/candidates", async (req, res, next) => {
           sameUniversity,
           sameDepartment,
           matchScore,
-          matchedSkills,
+          matchedSkills: signal.matchedSkills,
           missingSkills,
           evidence: {
-            avgConfidence: Number(avgConfidence.toFixed(2)),
-            endorsementCount,
-            repoSignalCount
+            avgConfidence: Number(signal.avgConfidence.toFixed(2)),
+            endorsementCount: signal.endorsementCount,
+            repoSignalCount: signal.repoSignalCount
           },
           reasons
         };
@@ -466,6 +422,7 @@ graphRouter.post("/matchmaker/candidates", async (req, res, next) => {
 });
 
 // POST /graph/sync — re-sync a student's Neo4j nodes from PostgreSQL
+
 graphRouter.post("/sync", async (req, res, next) => {
   try {
     const { studentId } = z.object({ studentId: z.string() }).parse(req.body);
@@ -482,6 +439,7 @@ graphRouter.post("/sync", async (req, res, next) => {
     }
 
     const universityName = user.studentProfile?.university?.name ?? "Unknown";
+    const universityId = user.universityId;
 
     // Upsert the Student node
     await runWrite(
@@ -489,9 +447,10 @@ graphRouter.post("/sync", async (req, res, next) => {
       MERGE (s:Student {id: $studentId})
       SET s.name = $name,
           s.university = $university,
+          s.universityId = $universityId,
           s.updatedAt = timestamp()
       `,
-      { studentId, name: user.fullName, university: universityName }
+      { studentId, name: user.fullName, university: universityName, universityId }
     );
 
     // Fetch all skills the student has endorsements for and sync them
@@ -530,9 +489,8 @@ graphRouter.post("/sync", async (req, res, next) => {
   }
 });
 
-
-
 // GET /graph/roles — return all industry roles from PostgreSQL
+
 graphRouter.get("/roles", async (_req, res, next) => {
   try {
     const roles = await prisma.industryRole.findMany({
@@ -561,8 +519,8 @@ graphRouter.get("/roles", async (_req, res, next) => {
   }
 });
 
-
 // GET /graph/skills/all — return all skill nodes from Neo4j
+
 graphRouter.get("/skills/all", async (_req, res, next) => {
   try {
     const records = await runRead<{ name: string; category: string }>(
@@ -578,7 +536,6 @@ graphRouter.get("/skills/all", async (_req, res, next) => {
     next(error);
   }
 });
-
 
 // POST /graph/reactivate — reactivate a dormant skill
 

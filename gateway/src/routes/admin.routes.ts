@@ -23,7 +23,8 @@ import {
   deleteSkill,
   exportAuditLogsCsv,
   extractSyllabusSkills,
-  listAlumni
+  listAlumni,
+  createInvitation
 } from "../controllers/admin.controller.js";
 
 export const adminRouter = Router();
@@ -41,6 +42,13 @@ adminRouter.patch(
   requireAuth,
   requireRole(["admin"]),
   asyncHandler(updateUser)
+);
+
+adminRouter.post(
+  "/admin/invitations",
+  requireAuth,
+  requireRole(["admin"]),
+  asyncHandler(createInvitation)
 );
 
 adminRouter.get(

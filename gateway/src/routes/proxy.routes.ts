@@ -4,6 +4,8 @@ import { requireAuth } from "../middleware/auth.middleware.js";
 import { requireRole } from "../middleware/rbac.middleware.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { CircuitBreaker } from "../utils/circuitBreaker.js";
+import { prisma } from "@skillgraph/database";
+import { fail } from "../utils/apiResponse.js";
 
 export const proxyRouter = Router();
 
@@ -33,18 +35,78 @@ async function proxyToGraph(
   }, fallback);
 }
 
+async function checkStudentAccess(req: any, res: any, studentId: string): Promise<boolean> {
+  const user = req.user;
+  if (!user) {
+    fail(res, "UNAUTHORIZED", "Missing authenticated user", 401);
+    return false;
+  }
+
+  // 1. Super Admin has global access
+  if (user.role === "admin" && !user.universityId) {
+    return true;
+  }
+
+  // 2. Resolve target student
+  const student = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { id: studentId },
+        { studentProfile: { id: studentId } }
+      ],
+      role: "student"
+    },
+    select: { id: true, universityId: true }
+  });
+
+  if (!student) {
+    fail(res, "NOT_FOUND", "Student not found or is not a student", 404);
+    return false;
+  }
+
+  // 3. Student can only access their own data
+  if (user.role === "student") {
+    if (user.id === student.id) {
+      return true;
+    }
+    fail(res, "FORBIDDEN", "Students can only access their own data", 403);
+    return false;
+  }
+
+  // 4. Professor or University Admin can access if in the same university
+  if ((user.role === "professor" || user.role === "admin") && user.universityId) {
+    if (user.universityId === student.universityId) {
+      return true;
+    }
+    fail(res, "FORBIDDEN", "You can only access students from your own university", 403);
+    return false;
+  }
+
+  // 5. Block anyone else
+  fail(res, "FORBIDDEN", "You do not have permission to access this student's data", 403);
+  return false;
+}
+
 proxyRouter.get("/graph/roles", requireAuth, asyncHandler(async (_req, res) => {
   const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/roles`);
   res.status(result.status).json(result.data);
 }));
 
 proxyRouter.get("/graph/student/:id/skills", requireAuth, asyncHandler(async (req, res) => {
-  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/student/${req.params.id}/skills`);
+  const studentId = req.params.id;
+  const isAuthorized = await checkStudentAccess(req, res, studentId);
+  if (!isAuthorized) return;
+
+  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/student/${studentId}/skills`);
   res.status(result.status).json(result.data);
 }));
 
 proxyRouter.get("/graph/galaxy/:studentId", requireAuth, asyncHandler(async (req, res) => {
-  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/galaxy/${req.params.studentId}`);
+  const studentId = req.params.studentId;
+  const isAuthorized = await checkStudentAccess(req, res, studentId);
+  if (!isAuthorized) return;
+
+  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/galaxy/${studentId}`);
   res.status(result.status).json(result.data);
 }));
 
@@ -73,11 +135,28 @@ proxyRouter.post("/matchmaker/candidates", requireAuth, asyncHandler(async (req,
 // Career GPS routes
 proxyRouter.get("/career-gps", requireAuth, asyncHandler(async (req, res) => {
   const { studentId, targetRoleId } = req.query;
+  if (!studentId || typeof studentId !== "string") {
+    fail(res, "INVALID_QUERY", "studentId is required", 400);
+    return;
+  }
+
+  const isAuthorized = await checkStudentAccess(req, res, studentId);
+  if (!isAuthorized) return;
+
   const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/career-gps?studentId=${studentId}&targetRoleId=${targetRoleId}`);
   res.status(result.status).json(result.data);
 }));
 
 proxyRouter.post("/career-gps/save", requireAuth, asyncHandler(async (req, res) => {
+  const { studentId } = req.body;
+  if (!studentId || typeof studentId !== "string") {
+    fail(res, "INVALID_BODY", "studentId is required", 400);
+    return;
+  }
+
+  const isAuthorized = await checkStudentAccess(req, res, studentId);
+  if (!isAuthorized) return;
+
   const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/career-gps/save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -87,31 +166,48 @@ proxyRouter.post("/career-gps/save", requireAuth, asyncHandler(async (req, res) 
 }));
 
 proxyRouter.get("/career-gps/history/:studentId", requireAuth, asyncHandler(async (req, res) => {
-  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/career-gps/history/${req.params.studentId}`);
+  const studentId = req.params.studentId;
+  const isAuthorized = await checkStudentAccess(req, res, studentId);
+  if (!isAuthorized) return;
+
+  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/career-gps/history/${studentId}`);
   res.status(result.status).json(result.data);
 }));
 
-proxyRouter.get("/admin/analytics/skill-heatmap", requireAuth, requireRole(["admin", "professor"]), asyncHandler(async (_req, res) => {
-  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/skill-heatmap`);
+proxyRouter.get("/admin/analytics/skill-heatmap", requireAuth, requireRole(["admin", "professor", "alumni"]), asyncHandler(async (req, res) => {
+  const uid = req.user?.universityId ? `?universityId=${req.user.universityId}` : '';
+  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/skill-heatmap${uid}`);
   res.status(result.status).json(result.data);
 }));
 
-proxyRouter.get("/admin/analytics/industry-gap", requireAuth, requireRole(["admin", "professor"]), asyncHandler(async (_req, res) => {
-  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/industry-gap`);
+proxyRouter.get("/admin/analytics/industry-gap", requireAuth, requireRole(["admin", "professor", "alumni"]), asyncHandler(async (req, res) => {
+  const uid = req.user?.universityId ? `?universityId=${req.user.universityId}` : '';
+  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/industry-gap${uid}`);
   res.status(result.status).json(result.data);
 }));
 
-proxyRouter.get("/admin/analytics/missing-skills", requireAuth, requireRole(["admin", "professor"]), asyncHandler(async (_req, res) => {
-  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/missing-skills`);
+proxyRouter.get("/admin/analytics/missing-skills", requireAuth, requireRole(["admin", "professor", "alumni"]), asyncHandler(async (req, res) => {
+  const uid = req.user?.universityId ? `?universityId=${req.user.universityId}` : '';
+  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/missing-skills${uid}`);
   res.status(result.status).json(result.data);
 }));
 
-proxyRouter.get("/admin/analytics/trend", requireAuth, requireRole(["admin", "professor"]), asyncHandler(async (_req, res) => {
-  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/trend`);
+proxyRouter.get("/admin/analytics/trend", requireAuth, requireRole(["admin", "professor", "alumni"]), asyncHandler(async (req, res) => {
+  const uid = req.user?.universityId ? `?universityId=${req.user.universityId}` : '';
+  const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/analytics/trend${uid}`);
   res.status(result.status).json(result.data);
 }));
 
 proxyRouter.post("/simulator/run", requireAuth, asyncHandler(async (req, res) => {
+  const { studentId } = req.body;
+  if (!studentId || typeof studentId !== "string") {
+    fail(res, "INVALID_BODY", "studentId is required", 400);
+    return;
+  }
+
+  const isAuthorized = await checkStudentAccess(req, res, studentId);
+  if (!isAuthorized) return;
+
   const result = await proxyToGraph(`${env.GRAPH_SERVICE_URL}/graph/simulator/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

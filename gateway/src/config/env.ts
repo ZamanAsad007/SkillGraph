@@ -3,11 +3,6 @@ import { z } from "zod";
 
 dotenv.config();
 
-const booleanEnv = z.preprocess((value) => {
-  if (typeof value === "string") return ["1", "true", "yes"].includes(value.toLowerCase());
-  return value;
-}, z.boolean());
-
 const envSchema = z.object({
   GATEWAY_PORT: z.coerce.number().default(3000),
   NODE_ENV: z.string().default("development"),
@@ -19,20 +14,19 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_CALLBACK_URL: z.string().optional(),
-  FRONTEND_URL: z.string().url().default("http://localhost:5173"),
-  GRAPH_SERVICE_URL: z.string().url().default("http://graph-service:3001"),
-  NLP_SERVICE_URL: z.string().url().default("http://nlp-service:8001"),
+  FRONTEND_URL: z.string().default("http://localhost:5173"),
+  GRAPH_SERVICE_URL: z.string().default("http://localhost:3001"),
+  NLP_SERVICE_URL: z.string().default("http://localhost:8001"),
   TOKEN_ENCRYPTION_KEY: z.string().default("skillgraph-development-token-key"),
-  SMTP_HOST: z.string().optional(),
-  SMTP_PORT: z.coerce.number().optional(),
-  SMTP_SECURE: booleanEnv.default(false),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASS: z.string().optional(),
-  SMTP_FROM: z.string().optional(),
   JWT_PUBLIC_KEY: z.string().optional(),
   JWT_PRIVATE_KEY: z.string().optional(),
   JWT_ISSUER: z.string().default("skillgraph"),
-  JWT_AUDIENCE: z.string().default("skillgraph-web")
+  JWT_AUDIENCE: z.string().default("skillgraph-web"),
+  SMTP_HOST: z.string().default("smtp.gmail.com"),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().default("noreply@skillgraph.com")
 });
 
 export const env = envSchema.parse(process.env);

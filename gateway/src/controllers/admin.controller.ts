@@ -1,7 +1,9 @@
 import type { Request, Response } from "express";
+import crypto from "node:crypto";
 import { prisma } from "@skillgraph/database";
 import { ok, fail } from "../utils/apiResponse.js";
 import { getRedis } from "../utils/redis.js";
+import { sendInvitationEmail, sendApprovalEmail } from "../utils/email.js";
 
 // In-memory global configuration settings for demo purposes
 export let globalConfig = {
@@ -16,27 +18,62 @@ export let globalConfig = {
 // 1. User Directory & Moderation (Admin only)
 export async function listUsers(req: Request, res: Response) {
   try {
-    const users = await prisma.user.findMany({
-      include: {
-        studentProfile: {
-          include: {
-            university: true,
-            department: true
-          }
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const skip = (page - 1) * limit;
+
+    const universityId = req.user?.universityId;
+    const where: any = {};
+    if (universityId) {
+      where.universityId = universityId;
+    }
+
+    if (req.query.isVerified !== undefined) {
+      where.isVerified = req.query.isVerified === "true";
+    }
+
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        include: {
+          studentProfile: {
+            include: {
+              university: true,
+              department: true
+            }
+          },
+          alumniProfile: {
+            include: {
+              university: true
+            }
+          },
+          university: true
         },
-        alumniProfile: true
-      },
-      orderBy: { createdAt: "desc" }
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit
+      }),
+      prisma.user.count({ where })
+    ]);
+
+    ok(res, {
+      users,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
     });
-    ok(res, users);
   } catch (error: any) {
     fail(res, "DB_ERROR", error.message, 500);
   }
 }
 
+
 export async function updateUser(req: Request, res: Response) {
   const { id } = req.params;
-  const { role, isActive } = req.body as { role?: string; isActive?: boolean };
+  const { role, isActive, isVerified } = req.body as { role?: string; isActive?: boolean; isVerified?: boolean };
 
   try {
     const user = await prisma.user.findUnique({ where: { id } });
@@ -45,14 +82,30 @@ export async function updateUser(req: Request, res: Response) {
       return;
     }
 
+    // Enforce university isolation for University Admins
+    if (req.user?.universityId && user.universityId !== req.user.universityId) {
+      fail(res, "FORBIDDEN", "You can only manage users within your own university", 403);
+      return;
+    }
+
     const updateData: any = {};
     if (role !== undefined) updateData.role = role;
     if (isActive !== undefined) updateData.isActive = isActive;
+    if (isVerified !== undefined) updateData.isVerified = isVerified;
 
     const updatedUser = await prisma.user.update({
       where: { id },
-      data: updateData
+      data: updateData,
+      include: { university: true }
     });
+
+    // Send approval email if user was just verified
+    if (isVerified === true && !user.isVerified) {
+      const universityName = updatedUser.university?.name || "your university";
+      if (updatedUser.email) {
+        sendApprovalEmail(updatedUser.email, updatedUser.fullName, universityName).catch(() => {});
+      }
+    }
 
     // Automatically manage profiles if the role changes
     if (role !== undefined && role !== user.role) {
@@ -73,11 +126,19 @@ export async function updateUser(req: Request, res: Response) {
             data: {
               userId: id,
               willingToMentor: true,
-              verified: true
+              verified: isVerified ?? true
             }
           });
         }
       }
+    }
+
+    // Auto-update AlumniProfile verified state if isVerified is updated
+    if (isVerified !== undefined && user.role === "alumni") {
+      await prisma.alumniProfile.updateMany({
+        where: { userId: id },
+        data: { verified: isVerified }
+      });
     }
 
     ok(res, updatedUser);
@@ -137,8 +198,13 @@ export async function updateConfig(req: Request, res: Response) {
 // 4. Department Student Directory (Professor/Admin)
 export async function listStudents(req: Request, res: Response) {
   try {
+    const universityId = req.user?.universityId;
+    const where: any = { role: "student" };
+    if (universityId) {
+      where.universityId = universityId;
+    }
     const students = await prisma.user.findMany({
-      where: { role: "student" },
+      where,
       include: {
         studentProfile: {
           include: {
@@ -163,8 +229,13 @@ export async function listStudents(req: Request, res: Response) {
 // 5. Course Mapping Editor (Professor/Admin)
 export async function listCourses(req: Request, res: Response) {
   try {
+    const universityId = req.user?.universityId;
+    const where: any = { isUniversityApproved: true };
+    if (universityId) {
+      where.universityId = universityId;
+    }
     const courses = await prisma.learningResource.findMany({
-      where: { isUniversityApproved: true },
+      where,
       include: {
         skills: {
           include: {
@@ -194,20 +265,23 @@ export async function mapCourse(req: Request, res: Response) {
   }
 
   try {
+    const universityId = req.user?.universityId;
     const course = await prisma.learningResource.upsert({
       where: { url },
       update: {
         title,
         courseCode,
         isUniversityApproved: true,
-        type: "UNIVERSITY_COURSE"
+        type: "UNIVERSITY_COURSE",
+        universityId: universityId ?? undefined
       },
       create: {
         title,
         url,
         courseCode,
         isUniversityApproved: true,
-        type: "UNIVERSITY_COURSE"
+        type: "UNIVERSITY_COURSE",
+        universityId: universityId ?? undefined
       }
     });
 
@@ -248,7 +322,11 @@ export async function mapCourse(req: Request, res: Response) {
 // 6. Capstone Advising Explorer (Professor/Admin)
 export async function listCapstoneMatches(req: Request, res: Response) {
   try {
+    const universityId = req.user?.universityId;
+    const where = universityId ? { requester: { universityId } } : {};
+
     const matches = await prisma.teamRequest.findMany({
+      where,
       include: {
         project: {
           include: {
@@ -297,11 +375,23 @@ export async function listAllSkills(req: Request, res: Response) {
 
 export async function getKpiStats(req: Request, res: Response) {
   try {
+    const universityId = req.user?.universityId;
+
+    const userWhere: any = {};
+    const oauthWhere: any = { provider: "github" };
+    const alumniWhere: any = { verified: false };
+
+    if (universityId) {
+      userWhere.universityId = universityId;
+      oauthWhere.user = { universityId };
+      alumniWhere.universityId = universityId;
+    }
+
     const [totalUsers, githubConnections, totalRoles, pendingAlumni] = await Promise.all([
-      prisma.user.count(),
-      prisma.oauthConnection.count({ where: { provider: "github" } }),
+      prisma.user.count({ where: userWhere }),
+      prisma.oauthConnection.count({ where: oauthWhere }),
       prisma.industryRole.count(),
-      prisma.alumniProfile.count({ where: { verified: false } })
+      prisma.alumniProfile.count({ where: alumniWhere })
     ]);
 
     const connectionRate = totalUsers > 0 ? Math.round((githubConnections / totalUsers) * 100) : 0;
@@ -523,8 +613,13 @@ export async function extractSyllabusSkills(req: Request, res: Response) {
 
 export async function listAlumni(req: Request, res: Response) {
   try {
+    const universityId = req.user?.universityId;
+    const where: any = { verified: true };
+    if (universityId) {
+      where.universityId = universityId;
+    }
     const alumni = await prisma.alumniProfile.findMany({
-      where: { verified: true },
+      where,
       include: { user: true },
       orderBy: { createdAt: "desc" }
     });
@@ -542,6 +637,68 @@ export async function listAlumni(req: Request, res: Response) {
     }));
     
     ok(res, data);
+  } catch (error: any) {
+    fail(res, "DB_ERROR", error.message, 500);
+  }
+}
+
+export async function createInvitation(req: Request, res: Response) {
+  const { email, role, universityId } = req.body as { email?: string; role?: string; universityId?: string };
+  const normalizedEmail = email?.trim().toLowerCase();
+
+  if (!normalizedEmail || !role || !["professor", "alumni"].includes(role)) {
+    fail(res, "INVALID_INPUT", "Valid email and role ('professor' or 'alumni') are required", 400);
+    return;
+  }
+
+  // Force universityId to match local admin's scope if they are a University Admin
+  let targetUniversityId = universityId;
+  if (req.user?.universityId) {
+    targetUniversityId = req.user.universityId;
+  }
+
+  if (!targetUniversityId) {
+    fail(res, "UNIVERSITY_REQUIRED", "University ID is required", 400);
+    return;
+  }
+
+  try {
+    const university = await prisma.university.findUnique({ where: { id: targetUniversityId } });
+    if (!university) {
+      fail(res, "UNIVERSITY_NOT_FOUND", "Selected university not found", 404);
+      return;
+    }
+
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+    const invitation = await prisma.academicInvitation.create({
+      data: {
+        email: normalizedEmail,
+        role: role as any,
+        universityId: targetUniversityId,
+        token,
+        expiresAt
+      }
+    });
+
+    // Send invitation email (fire-and-forget)
+    sendInvitationEmail(
+      normalizedEmail,
+      role,
+      university.name,
+      token,
+      req.user?.id ? undefined : undefined
+    ).catch(() => {});
+
+    ok(res, {
+      id: invitation.id,
+      email: invitation.email,
+      role: invitation.role,
+      universityId: invitation.universityId,
+      token,
+      expiresAt
+    }, 201);
   } catch (error: any) {
     fail(res, "DB_ERROR", error.message, 500);
   }

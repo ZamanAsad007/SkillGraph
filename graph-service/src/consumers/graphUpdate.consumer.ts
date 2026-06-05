@@ -1,8 +1,9 @@
 import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 import { runWrite } from "../neo4j/driver.js";
+import { prisma } from "@skillgraph/database";
 
-const redis=new Redis(env.REDIS_URL);
+const redis = new Redis(env.REDIS_URL);
 const STREAM_KEY = "graph:update:queue";
 const CONSUMER_GROUP = "graph-service";
 const CONSUMER_NAME = `graph-service-${process.pid}`;
@@ -39,13 +40,26 @@ async function processMessage(message: GraphUpdateMessage): Promise<void> {
     return;
   }
 
+  // Fetch student's universityId from Postgres
+  let universityId: string | null = null;
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: student_id },
+      select: { universityId: true }
+    });
+    universityId = user?.universityId ?? null;
+  } catch (err) {
+    console.error(`[graphUpdate.consumer] Failed to query universityId for student ${student_id}:`, err);
+  }
+
   // Upsert Student node
   await runWrite(
     `
     MERGE (s:Student {id: $studentId})
-    SET s.updatedAt = timestamp()
+    SET s.universityId = $universityId,
+        s.updatedAt = timestamp()
     `,
-    { studentId: student_id }
+    { studentId: student_id, universityId }
   );
 
   // Upsert each Skill node and KNOWS edge
@@ -82,7 +96,7 @@ async function processMessage(message: GraphUpdateMessage): Promise<void> {
     );
   }
 
-    // Invalidate Redis cache keys for this student
+  // Invalidate Redis cache keys for this student
   try {
     const keys = await redis.keys(`career-gps:${student_id}:*`);
     if (keys.length > 0) {
@@ -98,15 +112,12 @@ async function processMessage(message: GraphUpdateMessage): Promise<void> {
     );
   }
 
-  
   console.log(
     `[graphUpdate.consumer] Synced ${extracted_skills.length} skills for student ${student_id}`
   );
 }
 
 export async function startGraphUpdateConsumer(): Promise<void> {
-  const redis = new Redis(env.REDIS_URL);
-
   await ensureConsumerGroup(redis);
   console.log(
     `[graphUpdate.consumer] Listening on stream "${STREAM_KEY}" as group "${CONSUMER_GROUP}"`

@@ -6,6 +6,8 @@ export type AccessTokenPayload = {
   sub:string;
   role:UserRole;
   githubHandle?:string;
+  universityId?:string;
+  isVerified:boolean;
 }
 
 const developmentSecret = crypto.randomUUID();

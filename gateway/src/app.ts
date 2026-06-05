@@ -23,5 +23,12 @@ app.get("/health", (_req, res) => {
   res.json({ success: true, data: { service: "gateway", status: "ok" } });
 });
 
+app.use((req, res, next) => {
+  if (req.path === "/api/auth/google/callback") {
+    req.url = req.url.replace("/api/auth/google/callback", "/api/v1/auth/google/callback");
+  }
+  next();
+});
+
 app.use("/api/v1", router);
 app.use(errorHandler);

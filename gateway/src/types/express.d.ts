@@ -1,15 +1,15 @@
 import type { UserRole } from "@prisma/client";
 
 declare global {
-  namespace Express{
-    interface Request{
-      user?:{
-        id:string;
-        role:UserRole;
-        githubHandle?:string;
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+        role: UserRole;
+        githubHandle?: string;
+        universityId?: string;
+        isVerified: boolean;
       };
     }
   }
 }
-
-export { };

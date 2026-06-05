@@ -8,6 +8,7 @@ import { ok, fail } from "../utils/apiResponse.js";
 import { encryptToken } from "../utils/crypto.js";
 import { signAccessToken, signRefreshToken, verifyToken } from "../utils/jwt.js";
 import { getRedis } from "../utils/redis.js";
+import { sendVerificationEmail } from "../utils/email.js";
 
 const scrypt = promisify(crypto.scrypt);
 
@@ -120,11 +121,13 @@ function refreshCookieOptions() {
   };
 }
 
-export function setAuthCookies(res: Response, user: { id: string; role: any; githubHandle?: string | null }) {
+export function setAuthCookies(res: Response, user: { id: string; role: any; githubHandle?: string | null; universityId?: string | null; isVerified: boolean }) {
   const accessToken = signAccessToken({
     sub: user.id,
     role: user.role,
-    githubHandle: user.githubHandle ?? undefined
+    githubHandle: user.githubHandle ?? undefined,
+    universityId: user.universityId ?? undefined,
+    isVerified: user.isVerified
   });
   const refreshToken = signRefreshToken({ sub: user.id });
   res.cookie("skillgraph_access", accessToken, accessCookieOptions());
@@ -410,22 +413,40 @@ export async function googleCallback(req: Request, res: Response) {
 }
 
 export async function registerWithEmail(req: Request, res: Response) {
-  const { fullName, email, password, role } = req.body as {
+  const { fullName, email, password, role, inviteToken } = req.body as {
     fullName?: string;
     email?: string;
     password?: string;
     role?: string;
+    inviteToken?: string;
   };
-  const normalizedEmail = email?.trim().toLowerCase();
+  let targetEmail = email?.trim().toLowerCase();
+  let targetRole = role;
+  let targetUniversityId: string | undefined;
 
-  if (!fullName?.trim() || !normalizedEmail || !password || password.length < 8) {
+  if (inviteToken) {
+    const invitation = await prisma.academicInvitation.findUnique({
+      where: { token: inviteToken }
+    });
+
+    if (!invitation || invitation.status !== "pending" || invitation.expiresAt < new Date()) {
+      fail(res, "INVALID_INVITATION", "The invitation is invalid, accepted, or expired", 400);
+      return;
+    }
+
+    targetEmail = invitation.email.trim().toLowerCase();
+    targetRole = invitation.role;
+    targetUniversityId = invitation.universityId;
+  }
+
+  if (!fullName?.trim() || !targetEmail || !password || password.length < 8) {
     fail(res, "INVALID_REGISTRATION", "Full name, valid email, and an 8+ character password are required", 400);
     return;
   }
 
-  const validRole = (role && ["student", "professor", "alumni"].includes(role)) ? role : "student";
+  const validRole = (targetRole && ["student", "professor", "alumni"].includes(targetRole)) ? targetRole : "student";
 
-  const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+  const existing = await prisma.user.findUnique({ where: { email: targetEmail } });
   if (existing) {
     fail(res, "EMAIL_ALREADY_REGISTERED", "An account already exists for this email", 409);
     return;
@@ -434,7 +455,7 @@ export async function registerWithEmail(req: Request, res: Response) {
   const verificationToken = crypto.randomBytes(32).toString("base64url");
 
   const userData: any = {
-    email: normalizedEmail,
+    email: targetEmail,
     fullName: fullName.trim(),
     passwordHash: await hashPassword(password),
     emailVerificationTokenHash: hashToken(verificationToken),
@@ -442,16 +463,39 @@ export async function registerWithEmail(req: Request, res: Response) {
     role: validRole
   };
 
+  if (targetUniversityId) {
+    userData.universityId = targetUniversityId;
+  }
+
   if (validRole === "alumni") {
-    userData.alumniProfile = { create: { willingToMentor: true } };
+    userData.isVerified = false;
+    userData.alumniProfile = { 
+      create: { 
+        willingToMentor: true, 
+        verified: false,
+        universityId: targetUniversityId 
+      } 
+    };
+  } else if (validRole === "professor") {
+    userData.isVerified = false;
   } else if (validRole === "student") {
-    userData.studentProfile = { create: { publicHandle: await generateUniquePublicHandle(normalizedEmail) } };
+    userData.studentProfile = { 
+      create: { 
+        publicHandle: await generateUniquePublicHandle(targetEmail),
+        universityId: targetUniversityId
+      } 
+    };
   }
 
   const user = await prisma.user.create({
     data: userData,
     include: { studentProfile: true, alumniProfile: true }
   });
+
+  // Send verification email (fire-and-forget)
+  if (user.email) {
+    sendVerificationEmail(user.email, user.fullName, verificationToken).catch(() => {});
+  }
 
   ok(res, {
     id: user.id,
@@ -480,14 +524,46 @@ export async function verifyEmail(req: Request, res: Response) {
     return;
   }
 
-  const verifiedUser = await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      emailVerifiedAt: new Date(),
-      emailVerificationTokenHash: null,
-      emailVerificationExpiresAt: null
+  // Check for any pending academic invitation matching this email
+  const invitation = await prisma.academicInvitation.findFirst({
+    where: {
+      email: user.email ?? "",
+      status: "pending",
+      expiresAt: { gt: new Date() }
     }
   });
+
+  const updateData: any = {
+    emailVerifiedAt: new Date(),
+    emailVerificationTokenHash: null,
+    emailVerificationExpiresAt: null
+  };
+
+  if (invitation) {
+    updateData.universityId = invitation.universityId;
+    updateData.isVerified = true;
+  }
+
+  const verifiedUser = await prisma.user.update({
+    where: { id: user.id },
+    data: updateData
+  });
+
+  if (invitation) {
+    // Mark invitation as accepted
+    await prisma.academicInvitation.update({
+      where: { id: invitation.id },
+      data: { status: "accepted" }
+    });
+
+    // If the role is alumni, ensure their profile is also verified and linked to university
+    if (user.role === "alumni") {
+      await prisma.alumniProfile.updateMany({
+        where: { userId: user.id },
+        data: { verified: true, universityId: invitation.universityId }
+      });
+    }
+  }
 
   setAuthCookies(res, verifiedUser);
   ok(res, { verified: true });
@@ -524,10 +600,16 @@ export async function getCurrentUser(req: Request, res: Response) {
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
     include: {
+      university: true,
       studentProfile: {
         include: {
           university: true,
           department: true
+        }
+      },
+      alumniProfile: {
+        include: {
+          university: true
         }
       },
       oauthConnections: true
@@ -537,6 +619,34 @@ export async function getCurrentUser(req: Request, res: Response) {
     fail(res, "USER_NOT_FOUND", "Authenticated user no longer exists", 404);
     return;
   }
+
+  let academicProfilePayload = null;
+  if (user.role === "student" && user.studentProfile) {
+    academicProfilePayload = {
+      universityId: user.studentProfile.universityId,
+      universityName: user.studentProfile.university?.name ?? null,
+      departmentId: user.studentProfile.departmentId,
+      departmentName: user.studentProfile.department?.name ?? null,
+      graduationYear: user.studentProfile.graduationYear
+    };
+  } else if (user.role === "alumni" && user.alumniProfile) {
+    academicProfilePayload = {
+      universityId: user.alumniProfile.universityId || user.universityId,
+      universityName: user.alumniProfile.university?.name || user.university?.name || null,
+      departmentId: null,
+      departmentName: null,
+      graduationYear: user.alumniProfile.graduationYear
+    };
+  } else if (user.role === "professor") {
+    academicProfilePayload = {
+      universityId: user.universityId,
+      universityName: user.university?.name ?? null,
+      departmentId: null,
+      departmentName: null,
+      graduationYear: null
+    };
+  }
+
   ok(res, {
     id: user.id,
     role: user.role,
@@ -548,15 +658,8 @@ export async function getCurrentUser(req: Request, res: Response) {
     fullName: user.fullName,
     avatarUrl: user.avatarUrl,
     publicHandle: user.studentProfile?.publicHandle,
-    academicProfile: user.studentProfile
-      ? {
-          universityId: user.studentProfile.universityId,
-          universityName: user.studentProfile.university?.name ?? null,
-          departmentId: user.studentProfile.departmentId,
-          departmentName: user.studentProfile.department?.name ?? null,
-          graduationYear: user.studentProfile.graduationYear
-        }
-      : null
+    isVerified: user.isVerified,
+    academicProfile: academicProfilePayload
   });
 }
 
@@ -705,26 +808,120 @@ export async function updateAcademicProfile(req: Request, res: Response) {
     }
   }
 
-  const profile = await ensureStudentProfile(req.user.id, req.user.githubHandle ?? req.user.id);
-  const updatedProfile = await prisma.studentProfile.update({
-    where: { id: profile.id },
-    data: {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    include: { alumniProfile: true }
+  });
+  if (!user) {
+    fail(res, "USER_NOT_FOUND", "User not found", 404);
+    return;
+  }
+
+  // 1. Block professor university updates if already configured
+  if (req.user.role === "professor" && user.universityId && user.universityId !== payload.universityId) {
+    fail(res, "PROHIBITED_UNIVERSITY_CHANGE", "Professors cannot shift universities directly in settings to protect academic and grading history. Please contact your new university administrator to issue an invitation, or register a new account.", 403);
+    return;
+  }
+
+  // 2. Block alumni university updates if already configured
+  if (req.user.role === "alumni" && user.alumniProfile?.universityId && user.alumniProfile.universityId !== payload.universityId) {
+    fail(res, "PROHIBITED_UNIVERSITY_CHANGE", "Alumni cannot change their university once configured.", 403);
+    return;
+  }
+
+  // 3. Determine isVerified based on role & allowedDomains
+  let isVerified = true;
+  if (req.user.role === "professor") {
+    isVerified = false; // Always requires admin approval
+  } else if (req.user.role === "student") {
+    if (university.allowedDomains && university.allowedDomains.length > 0) {
+      const emailDomain = user.email?.split("@")[1] || "";
+      isVerified = university.allowedDomains.some(d => emailDomain.toLowerCase().endsWith(d.toLowerCase()));
+    }
+  } else if (req.user.role === "alumni") {
+    isVerified = false; // Always requires admin approval
+  }
+
+  // Always update the User model's universityId and isVerified status
+  const updatedUser = await prisma.user.update({
+    where: { id: req.user.id },
+    data: { 
       universityId: payload.universityId,
-      departmentId: payload.departmentId ?? null,
-      graduationYear: payload.graduationYear ?? null
-    },
-    include: {
-      university: true,
-      department: true
+      isVerified
     }
   });
 
+  // Re-sign access tokens so session details refresh immediately
+  setAuthCookies(res, updatedUser);
+
+  if (req.user.role === "student") {
+    const profile = await ensureStudentProfile(req.user.id, req.user.githubHandle ?? req.user.id);
+    const updatedProfile = await prisma.studentProfile.update({
+      where: { id: profile.id },
+      data: {
+        universityId: payload.universityId,
+        departmentId: payload.departmentId ?? null,
+        graduationYear: payload.graduationYear ?? null
+      },
+      include: {
+        university: true,
+        department: true
+      }
+    });
+
+    ok(res, {
+      universityId: updatedProfile.universityId,
+      universityName: updatedProfile.university?.name ?? null,
+      departmentId: updatedProfile.departmentId,
+      departmentName: updatedProfile.department?.name ?? null,
+      graduationYear: updatedProfile.graduationYear
+    });
+    return;
+  }
+
+  if (req.user.role === "alumni") {
+    const existing = await prisma.alumniProfile.findUnique({ where: { userId: req.user.id } });
+    let alumniProfile;
+    if (existing) {
+      alumniProfile = await prisma.alumniProfile.update({
+        where: { id: existing.id },
+        data: {
+          universityId: payload.universityId,
+          graduationYear: payload.graduationYear ?? null,
+          verified: false
+        },
+        include: { university: true }
+      });
+    } else {
+      alumniProfile = await prisma.alumniProfile.create({
+        data: {
+          userId: req.user.id,
+          willingToMentor: true,
+          verified: false,
+          universityId: payload.universityId,
+          graduationYear: payload.graduationYear ?? null
+        },
+        include: { university: true }
+      });
+    }
+
+    ok(res, {
+      universityId: alumniProfile.universityId,
+      universityName: alumniProfile.university?.name ?? null,
+      departmentId: null,
+      departmentName: null,
+      graduationYear: alumniProfile.graduationYear
+    });
+    return;
+  }
+
+  // Else for professors/admins (only User record updated)
   ok(res, {
-    universityId: updatedProfile.universityId,
-    universityName: updatedProfile.university?.name ?? null,
-    departmentId: updatedProfile.departmentId,
-    departmentName: updatedProfile.department?.name ?? null,
-    graduationYear: updatedProfile.graduationYear
+    universityId: university.id,
+    universityName: university.name,
+    departmentId: null,
+    departmentName: null,
+    graduationYear: null
   });
 }
 
@@ -742,7 +939,8 @@ export function getSocketToken(req: Request, res: Response) {
   const socketToken = signAccessToken({
     sub: req.user.id,
     role: req.user.role,
-    githubHandle: req.user.githubHandle
+    githubHandle: req.user.githubHandle,
+    isVerified: req.user.isVerified
   });
   ok(res, { token: socketToken });
 }
@@ -797,5 +995,34 @@ export async function updateUserRole(req: Request, res: Response) {
   } catch (error) {
     console.error("Failed to update user role:", error);
     fail(res, "INTERNAL_ERROR", "Failed to update user role", 500);
+  }
+}
+
+export async function getInvitationDetails(req: Request, res: Response) {
+  const { token } = req.params;
+  if (!token) {
+    fail(res, "MISSING_TOKEN", "Invitation token is required", 400);
+    return;
+  }
+
+  try {
+    const invitation = await prisma.academicInvitation.findUnique({
+      where: { token },
+      include: { university: true }
+    });
+
+    if (!invitation || invitation.status !== "pending" || invitation.expiresAt < new Date()) {
+      fail(res, "INVALID_TOKEN", "Invitation token is invalid, already used, or expired", 400);
+      return;
+    }
+
+    ok(res, {
+      email: invitation.email,
+      role: invitation.role,
+      universityId: invitation.universityId,
+      universityName: invitation.university.name
+    });
+  } catch (error: any) {
+    fail(res, "DB_ERROR", error.message, 500);
   }
 }

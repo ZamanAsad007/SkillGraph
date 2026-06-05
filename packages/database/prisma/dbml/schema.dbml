@@ -32,6 +32,9 @@ Table users {
   receivedInvites project_invitations [not null]
   notifications system_notifications [not null]
   auditLogs audit_logs [not null]
+  universityId String
+  university universities
+  isVerified Boolean [not null, default: true]
 }
 
 Table student_profiles {
@@ -68,6 +71,11 @@ Table universities {
   departments departments [not null]
   studentProfiles student_profiles [not null]
   careerFairs career_fairs [not null]
+  users users [not null]
+  learningResources learning_resources [not null]
+  alumniProfiles alumni_profiles [not null]
+  allowedDomains String[] [not null]
+  academicInvitations academic_invitations [not null]
 }
 
 Table departments {
@@ -218,6 +226,8 @@ Table learning_resources {
   createdAt DateTime [default: `now()`, not null]
   skills resource_skills [not null]
   completions student_resource_completions [not null]
+  universityId String
+  university universities
 }
 
 Table resource_skills {
@@ -383,6 +393,8 @@ Table alumni_profiles {
   createdAt DateTime [default: `now()`, not null]
   user users [not null]
   mentorships alumni_mentorships [not null]
+  universityId String
+  university universities
 }
 
 Table alumni_mentorships {
@@ -441,6 +453,18 @@ Table simulated_paths {
   targetRole industry_roles
 }
 
+Table academic_invitations {
+  id String [pk]
+  email String [not null]
+  role UserRole [not null]
+  universityId String [not null]
+  token String [unique, not null]
+  status InvitationStatus [not null, default: 'pending']
+  createdAt DateTime [default: `now()`, not null]
+  expiresAt DateTime [not null]
+  university universities [not null]
+}
+
 Enum UserRole {
   student
   professor
@@ -459,6 +483,8 @@ Enum MentorshipStatus {
   active
   completed
 }
+
+Ref: users.universityId > universities.id
 
 Ref: student_profiles.userId - users.id [delete: Cascade]
 
@@ -489,6 +515,8 @@ Ref: skills.categoryId > skill_categories.id
 Ref: role_requirements.roleId > industry_roles.id [delete: Cascade]
 
 Ref: role_requirements.skillId > skills.id
+
+Ref: learning_resources.universityId > universities.id
 
 Ref: resource_skills.resourceId > learning_resources.id [delete: Cascade]
 
@@ -534,6 +562,8 @@ Ref: career_fair_booths.fairId > career_fairs.id
 
 Ref: alumni_profiles.userId - users.id
 
+Ref: alumni_profiles.universityId > universities.id
+
 Ref: alumni_mentorships.studentId > student_profiles.id
 
 Ref: alumni_mentorships.alumniId > alumni_profiles.id
@@ -549,3 +579,5 @@ Ref: skill_decay_audits.studentId > student_profiles.id
 Ref: simulated_paths.studentId > student_profiles.id
 
 Ref: simulated_paths.targetRoleId > industry_roles.id
+
+Ref: academic_invitations.universityId > universities.id

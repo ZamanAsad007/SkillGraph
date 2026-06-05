@@ -60,26 +60,23 @@ export async function getFairMatches(req: Request, res: Response) {
       resolvedUserId = student.userId;
     }
 
-    // Fetch student profile details
+    // Fetch student profile details (optional for non-students)
     const student = await prisma.studentProfile.findUnique({
       where: { userId: resolvedUserId }
     });
 
-    if (!student) {
-      fail(res, "STUDENT_NOT_FOUND", "Student profile not found", 404);
-      return;
-    }
-
-    // Get student's skills from graph-service
+    // Get student's skills from graph-service (only if student profile exists)
     let skills: any[] = [];
-    try {
-      const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/student/${resolvedUserId}/skills`);
-      if (response.ok) {
-        const body = await response.json();
-        skills = body?.data?.skills || [];
+    if (student) {
+      try {
+        const response = await fetch(`${env.GRAPH_SERVICE_URL}/graph/student/${resolvedUserId}/skills`);
+        if (response.ok) {
+          const body = await response.json();
+          skills = body?.data?.skills || [];
+        }
+      } catch (err) {
+        console.error("Failed to fetch student skills from graph-service:", err);
       }
-    } catch (err) {
-      console.error("Failed to fetch student skills from graph-service:", err);
     }
 
     // Get all booths for this fair
@@ -95,8 +92,21 @@ export async function getFairMatches(req: Request, res: Response) {
       const gapSkills: string[] = [];
 
       for (const reqSkill of requiredSkillsList) {
-        const reqName = reqSkill.name.toLowerCase();
-        const criticality = reqSkill.criticality || 1;
+        let reqName = "";
+        let criticality = 1;
+        let skillLabel = "";
+
+        if (typeof reqSkill === "string") {
+          reqName = reqSkill.toLowerCase();
+          criticality = 1;
+          skillLabel = reqSkill;
+        } else if (reqSkill && typeof reqSkill === "object") {
+          reqName = (reqSkill.name || "").toLowerCase();
+          criticality = reqSkill.criticality || 1;
+          skillLabel = reqSkill.name || "";
+        }
+
+        if (!reqName) continue;
         totalCriticality += criticality;
 
         const hasSkill = skills.some(
@@ -105,9 +115,9 @@ export async function getFairMatches(req: Request, res: Response) {
 
         if (hasSkill) {
           matchedCriticality += criticality;
-          matchedSkills.push(reqSkill.name);
+          matchedSkills.push(skillLabel);
         } else {
-          gapSkills.push(reqSkill.name);
+          gapSkills.push(skillLabel);
         }
       }
 
@@ -138,7 +148,7 @@ export async function getFairMatches(req: Request, res: Response) {
 
     ok(res, {
       fairId,
-      studentId: student.id,
+      studentId: student?.id || null,
       matches
     });
   } catch (error) {

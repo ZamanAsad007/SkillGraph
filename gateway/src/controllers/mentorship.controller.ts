@@ -294,6 +294,88 @@ export async function acceptMentorship(req: Request, res: Response) {
   }
 }
 
+// Complete a mentorship connection
+export async function completeMentorship(req: Request, res: Response) {
+  if (!req.user) {
+    fail(res, "UNAUTHORIZED", "Missing authenticated user", 401);
+    return;
+  }
+
+  const { id } = req.params;
+
+  try {
+    const mentorship = await prisma.alumniMentorship.findUnique({
+      where: { id },
+      include: {
+        alumni: true
+      }
+    });
+
+    if (!mentorship) {
+      fail(res, "NOT_FOUND", "Mentorship request not found", 404);
+      return;
+    }
+
+    // Verify that the authenticated user is the alumnus of this mentorship record
+    if (mentorship.alumni.userId !== req.user.id) {
+      fail(res, "FORBIDDEN", "Only the assigned alumnus can complete this connection", 403);
+      return;
+    }
+
+    const updated = await prisma.alumniMentorship.update({
+      where: { id },
+      data: {
+        status: "completed",
+        endedAt: new Date()
+      }
+    });
+
+    ok(res, updated);
+  } catch (error) {
+    console.error("Failed to complete mentorship:", error);
+    fail(res, "INTERNAL_ERROR", "Failed to complete mentorship", 500);
+  }
+}
+
+// Decline/Delete a mentorship connection request
+export async function declineMentorship(req: Request, res: Response) {
+  if (!req.user) {
+    fail(res, "UNAUTHORIZED", "Missing authenticated user", 401);
+    return;
+  }
+
+  const { id } = req.params;
+
+  try {
+    const mentorship = await prisma.alumniMentorship.findUnique({
+      where: { id },
+      include: {
+        alumni: true
+      }
+    });
+
+    if (!mentorship) {
+      fail(res, "NOT_FOUND", "Mentorship request not found", 404);
+      return;
+    }
+
+    // Verify that the authenticated user is the alumnus of this mentorship record
+    if (mentorship.alumni.userId !== req.user.id) {
+      fail(res, "FORBIDDEN", "Only the assigned alumnus can decline this request", 403);
+      return;
+    }
+
+    await prisma.alumniMentorship.delete({
+      where: { id }
+    });
+
+    ok(res, { message: "Mentorship request declined and removed successfully" });
+  } catch (error) {
+    console.error("Failed to decline mentorship:", error);
+    fail(res, "INTERNAL_ERROR", "Failed to decline mentorship request", 500);
+  }
+}
+
 // Setup/Register user as an Alumnus
 export async function registerAlumni(req: Request, res: Response) {
   if (!req.user) {
@@ -345,7 +427,8 @@ export async function registerAlumni(req: Request, res: Response) {
         willingToMentor: willingToMentor !== undefined ? willingToMentor : true,
         linkedinUrl,
         alumniCardUrl,
-        verified: false
+        verified: false,
+        universityId: req.user.universityId
       },
       update: {
         graduationYear,
@@ -356,7 +439,8 @@ export async function registerAlumni(req: Request, res: Response) {
         willingToMentor: willingToMentor !== undefined ? willingToMentor : true,
         linkedinUrl,
         alumniCardUrl: alumniCardUrl !== undefined ? alumniCardUrl : undefined,
-        verified
+        verified,
+        universityId: req.user.universityId
       }
     });
 
